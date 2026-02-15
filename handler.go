@@ -1,12 +1,10 @@
 package baseapi
 
 import (
-	"encoding/base64"
 	"io"
 	"net/http"
 	"strings"
 
-	"github.com/aws/aws-lambda-go/events"
 	"github.com/ncastellani/baseutils"
 )
 
@@ -34,9 +32,10 @@ func HandleHTTPServerRequests(w http.ResponseWriter, e *http.Request, api *API) 
 
 	for k, v := range e.Header {
 		headers[k] = v[0]
-		if k == "Fly-Request-Id" {
+		switch k {
+		case "Fly-Request-Id":
 			requestID = headers[k]
-		} else if k == "Fly-Client-IP" {
+		case "Fly-Client-IP":
 			ip = headers[k]
 		}
 	}
@@ -76,49 +75,4 @@ func HandleHTTPServerRequests(w http.ResponseWriter, e *http.Request, api *API) 
 	w.Write(content)
 
 	r.Logger.Println("DONE!")
-}
-
-// handle AWS API Gateway HTTP requests
-func HandleLambdaAPIGatewayRequests(e events.APIGatewayProxyRequest, api *API) (events.APIGatewayProxyResponse, error) {
-
-	// assemble the request
-	r := Request{
-		ID:      e.RequestContext.RequestID,
-		IP:      e.RequestContext.Identity.SourceIP,
-		Headers: e.Headers,
-		Query:   e.QueryStringParameters,
-		Method:  e.RequestContext.HTTPMethod,
-
-		// set the request result as OK
-		ResultCode: "OK",
-		ResultData: baseutils.Empty,
-	}
-
-	// parse the path for getting the action
-	r.Path = "index"
-
-	if e.Path != "/" {
-		r.Path = e.Path[1:]
-	}
-
-	// get the request input body also handling Base64 encoded bodies
-	if e.IsBase64Encoded {
-		r.Input, _ = base64.StdEncoding.DecodeString(e.Body)
-	} else {
-		r.Input = []byte(e.Body)
-	}
-
-	// call the request handler
-	code, content, headers := r.HandleRequest(api)
-
-	r.Logger.Println("DONE")
-
-	// append the request ID
-	headers["x-request-id"] = r.ID
-
-	return events.APIGatewayProxyResponse{
-		StatusCode: code,
-		Headers:    headers,
-		Body:       string(content),
-	}, nil
 }
