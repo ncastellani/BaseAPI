@@ -3,7 +3,6 @@ package baseapi
 import (
 	"log"
 
-	"github.com/pocketbase/dbx"
 	"gopkg.in/guregu/null.v4"
 )
 
@@ -37,7 +36,6 @@ type Request struct {
 	Parameters *map[string]any
 
 	// application data
-	DBTx    *dbx.Tx
 	User    any
 	AppData any
 
