@@ -1,3 +1,3 @@
 
 ## BaseAPI
-HTTP handler for Go API services with routing and validations.
+Basic API functions for routing, validation and request handling for Go applications.
