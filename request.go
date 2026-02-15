@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"reflect"
+	"slices"
 	"strings"
 	"time"
 
@@ -226,7 +227,7 @@ func (r *Request) parsePayload() {
 		// check if the param is on the recieved keys
 		var methodParams *map[string]any
 
-		if !baseutils.StringInSlice(v.Name, bodyKeys) {
+		if !slices.Contains(bodyKeys, v.Name) {
 			r.Logger.Printf("parameter missing at the body payload [param: %v]", v.Name)
 
 			missing = append(missing, v)
@@ -271,7 +272,7 @@ func (r *Request) parsePayload() {
 
 		// perform param data check for the "enum" type
 		if v.Kind == "enum" {
-			if !baseutils.StringInSlice((*methodParams)[v.Name].(string), v.Options) {
+			if !slices.Contains(v.Options, (*methodParams)[v.Name].(string)) {
 				r.Logger.Printf("parameter got an value that does not match the ENUM available ones [param: %v] [recieved: %v]", v.Name, (*methodParams)[v.Name].(string))
 
 				invalid = append(invalid, v)
