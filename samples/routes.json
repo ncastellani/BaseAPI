@@ -4,6 +4,7 @@
         "GET": {
             "function": "index",
             "authentication": false,
+            "setup_transaction": false,
             "parameters": []
         }
     },
@@ -12,6 +13,7 @@
         "POST": {
             "function": "send_event",
             "authentication": true,
+            "setup_transaction": true,
             "parameters": [
                 { "name": "queue", "kind": "enum", "required": true, "options": [ "opt1", "opt2" ] },
                 { "name": "key", "kind": "string", "required": true, "options": [] },

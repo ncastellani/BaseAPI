@@ -3,6 +3,7 @@ package baseapi
 import (
 	"log"
 
+	"github.com/pocketbase/dbx"
 	"gopkg.in/guregu/null.v4"
 )
 
@@ -36,8 +37,8 @@ type Request struct {
 	Parameters *map[string]any
 
 	// application data
-	User    any
-	AppData any
+	DB   *dbx.Tx
+	User any
 
 	// method response
 	ResultData any
@@ -46,9 +47,10 @@ type Request struct {
 
 // define an API method within a route
 type Resource struct {
-	ResourceMethod string              `json:"function"`       // application map into a API function
-	Authentication bool                `json:"authentication"` // if a Authorization header (bearer token) should be at the request
-	Parameters     []ResourceParameter `json:"parameters"`     // acceptable parameters for this action
+	ResourceMethod   string              `json:"function"`          // application map into a API function
+	Authentication   bool                `json:"authentication"`    // if a Authorization header (bearer token) should be at the request
+	SetupTransaction bool                `json:"setup_transaction"` // if a DB transaction must be open for requests on this resource
+	Parameters       []ResourceParameter `json:"parameters"`        // acceptable parameters for this action
 }
 
 // define an parameter specification for the resource
