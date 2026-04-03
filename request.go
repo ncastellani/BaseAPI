@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"reflect"
 	"slices"
 	"strings"
@@ -249,7 +250,18 @@ func (r *Request) parsePayload() {
 				continue
 			}
 		case int, int8, int16, int32, int64, float32, float64:
-			if v.Kind != "number" {
+			isInteger := true
+			switch f := (*methodParams)[v.Name].(type) {
+			case float64:
+				isInteger = f == math.Trunc(f)
+			case float32:
+				isInteger = float64(f) == math.Trunc(float64(f))
+			}
+
+			if v.Kind != "integer" && v.Kind != "float" {
+				invalid = append(invalid, v)
+				continue
+			} else if v.Kind == "integer" && !isInteger {
 				invalid = append(invalid, v)
 				continue
 			}
