@@ -56,8 +56,8 @@ type Resource struct {
 // define an parameter specification for the resource
 type ResourceParameter struct {
 	Name      string   `json:"name"`       // parameter name
-	Kind      string   `json:"kind"`       // parameter type (string/number/enum)
+	Kind      string   `json:"kind"`       // parameter type (string/integer/float/enum/bool/array/map)
 	Required  bool     `json:"required"`   // is required
+	MaxLength int      `json:"max_length"` // if type STRING, validate its length
 	Options   []string `json:"options"`    // if type ENUM, this is a list of the available options
-	MaxLength int      `json:"max_length"` // !! if type STRING, validate its length
 }

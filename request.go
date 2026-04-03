@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/ncastellani/baseutils"
 	"gopkg.in/guregu/null.v4"
@@ -241,6 +242,13 @@ func (r *Request) parsePayload() {
 		switch (*methodParams)[v.Name].(type) {
 		case string:
 			if v.Kind != "string" && v.Kind != "enum" {
+				invalid = append(invalid, v)
+				continue
+			}
+
+			if v.MaxLength > 0 && utf8.RuneCountInString((*methodParams)[v.Name].(string)) > v.MaxLength {
+				r.Logger.Printf("parameter exceeded maximum length [param: %v] [maxLength: %v] [length: %v]", v.Name, v.MaxLength, utf8.RuneCountInString((*methodParams)[v.Name].(string)))
+
 				invalid = append(invalid, v)
 				continue
 			}
