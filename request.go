@@ -244,6 +244,9 @@ func (r *Request) parsePayload() {
 			if v.Kind != "string" && v.Kind != "enum" {
 				invalid = append(invalid, v)
 				continue
+			} else if (*methodParams)[v.Name].(string) == "" && v.Required {
+				invalid = append(invalid, v)
+				continue
 			}
 
 			if v.MaxLength > 0 && utf8.RuneCountInString((*methodParams)[v.Name].(string)) > v.MaxLength {
