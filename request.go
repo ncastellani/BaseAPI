@@ -65,10 +65,9 @@ func (r *Request) HandleRequest(api *API) (int, []byte, map[string]string) {
 	// call the API method
 	r.callMethod()
 
-	// call the post method middleware
-	if r.ResultCode == "OK" {
-		r.api.RequestPostMethod(r)
-	}
+	// always call the post method middleware so callers can perform cleanup
+	// (such as commit/rollback of transactions) regardless of the result code
+	r.api.RequestPostMethod(r)
 
 	// assemble the response
 	return r.makeResponse()
