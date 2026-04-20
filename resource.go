@@ -37,8 +37,9 @@ type Request struct {
 	Parameters *map[string]any
 
 	// application data
-	DB   *dbx.Tx
-	User any
+	DB      *dbx.Tx
+	User    any
+	Context map[string]any
 
 	// method response
 	ResultData any

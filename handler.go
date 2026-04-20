@@ -55,6 +55,7 @@ func HandleHTTPServerRequests(w http.ResponseWriter, e *http.Request, api *API) 
 		Method:  e.Method,
 		Path:    path,
 		Input:   input,
+		Context: map[string]any{},
 
 		// set the request result as OK
 		ResultCode: "OK",
