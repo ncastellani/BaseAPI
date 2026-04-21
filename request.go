@@ -17,7 +17,7 @@ import (
 )
 
 // call all the request functions
-func (r *Request) HandleRequest(api *API) (int, []byte, map[string]string) {
+func (r *Request) HandleRequest(api *API) (code int, content []byte, headers map[string]string) {
 	r.api = api
 
 	// join the host data with the request ID
@@ -42,6 +42,11 @@ func (r *Request) HandleRequest(api *API) (int, []byte, map[string]string) {
 
 			r.ResultCode = "I001"
 			r.ResultData = rcv
+
+			// still produce a valid response so the outer HTTP handler does not
+			// crash on nil headers; callers rely on these return values always
+			// being non-nil, even after a panic was recovered
+			code, content, headers = r.makeResponse()
 		}
 	}()
 
@@ -298,8 +303,15 @@ func (r *Request) parsePayload() {
 
 		// perform param data check for the "enum" type
 		if v.Kind == "enum" {
-			if !slices.Contains(v.Options, (*methodParams)[v.Name].(string)) {
-				r.Logger.Printf("parameter got an value that does not match the ENUM available ones [param: %v] [recieved: %v]", v.Name, (*methodParams)[v.Name].(string))
+			strVal, ok := (*methodParams)[v.Name].(string)
+			if !ok {
+				// the value is nil (null in JSON) — for optional params this passes through as nil;
+				// for required params it was already flagged by the default branch of the type switch
+				continue
+			}
+
+			if !slices.Contains(v.Options, strVal) {
+				r.Logger.Printf("parameter got an value that does not match the ENUM available ones [param: %v] [recieved: %v]", v.Name, strVal)
 
 				invalid = append(invalid, v)
 				continue
