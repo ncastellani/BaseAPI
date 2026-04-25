@@ -3,6 +3,7 @@
     "index": {
         "GET": {
             "function": "index",
+            "input_format": "json",
             "authentication": false,
             "setup_transaction": false,
             "parameters": []
@@ -12,13 +13,29 @@
     "send_event": {
         "POST": {
             "function": "send_event",
+            "input_format": "json",
             "authentication": true,
             "setup_transaction": true,
             "parameters": [
-                { "name": "queue", "kind": "enum", "required": true, "max_length": 0, "options": [ "opt1", "opt2" ] },
-                { "name": "key", "kind": "string", "required": true, "max_length": 0, "options": [] },
-                { "name": "event", "kind": "string", "required": true, "max_length": 0, "options": [] },
-                { "name": "payload", "kind": "map", "required": true, "max_length": 0, "options": [] }
+                { "name": "queue", "kind": "enum", "get_from": "body", "required": true, "max_length": 0, "options": [ "opt1", "opt2" ] },
+                { "name": "key", "kind": "string", "get_from": "body", "required": true, "max_length": 0, "options": [] },
+                { "name": "event", "kind": "string", "get_from": "body", "required": true, "max_length": 0, "options": [] },
+                { "name": "payload", "kind": "map", "get_from": "body", "required": true, "max_length": 0, "options": [] }
+            ]
+        }
+    },
+
+    "webhook_form_example": {
+        "POST": {
+            "function": "webhook_form_example",
+            "input_format": "form",
+            "authentication": false,
+            "setup_transaction": false,
+            "parameters": [
+                { "name": "message_sid", "kind": "string", "get_from": "body", "required": true, "max_length": 64, "options": [] },
+                { "name": "message_status", "kind": "enum", "get_from": "body", "required": true, "max_length": 0, "options": [ "sent", "delivered", "read", "failed", "undelivered" ] },
+                { "name": "error_code", "kind": "integer", "get_from": "body", "required": false, "max_length": 0, "options": [] },
+                { "name": "trace_id", "kind": "string", "get_from": "query", "required": false, "max_length": 64, "options": [] }
             ]
         }
     }

@@ -8,7 +8,29 @@ import (
 	"github.com/ncastellani/baseutils"
 )
 
-// handle Go standard lib HTTP requests
+// HandleHTTPServerRequests is the net/http adapter. Mount it under the
+// catch-all path of any http.ServeMux (or framework router) and it will
+// translate the request into a baseapi.Request, run the lifecycle and
+// write the response back.
+//
+// Request-shaping details:
+//
+//   - Path: stripped of the leading slash; the empty path becomes "index"
+//     so the mandatory index route serves "/".
+//   - IP: taken from RemoteAddr, but Fly-Client-IP overrides it when
+//     present (transparent support for fly.io's edge).
+//   - Request ID: generated locally as a 16-char random string, but
+//     Fly-Request-Id overrides it when present so traces can be correlated
+//     across the edge and the application.
+//   - Headers / Query: only the first value of each key is kept (the
+//     library's parameter model is single-valued by design; multi-valued
+//     form bodies still flow through the form parser, not the query map).
+//   - ResultCode: pre-seeded to "OK" so the lifecycle starts in a good
+//     state.
+//
+// Response-shaping details: all headers returned by HandleRequest are
+// copied to the writer, and an extra `x-request-id` header is appended so
+// the client can echo it back in support requests.
 func HandleHTTPServerRequests(w http.ResponseWriter, e *http.Request, api *API) {
 
 	// parse the path for getting the resource

@@ -6,8 +6,9 @@ import (
 	"fmt"
 	"log"
 	"math"
-	"reflect"
+	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -16,7 +17,29 @@ import (
 	"gopkg.in/guregu/null.v4"
 )
 
-// call all the request functions
+// HandleRequest is the request lifecycle entry point. The transport adapter
+// (HandleHTTPServerRequests, or any other) builds a Request, calls this
+// method and forwards the returned HTTP code, body and headers back to the
+// client.
+//
+// The lifecycle is:
+//
+//  1. Build the per-request correlation ID (hostData ++ unix-ts ++ raw ID),
+//     base64-encode it and assemble the request logger.
+//  2. Parse the User-Agent into r.Agent.
+//  3. determineResource → match the route + method, populate r.Resource.
+//  4. parseAuthentication → enforce the Bearer token if the resource declares
+//     authentication=true.
+//  5. parsePayload → decode and validate parameters into r.Parameters.
+//  6. RequestPreMethod (only if ResultCode is still "OK") → application hook
+//     for transaction setup, user loading, etc.
+//  7. callMethod → dispatch to the resource function.
+//  8. RequestPostMethod → unconditional cleanup hook (commit/rollback, etc.).
+//  9. makeResponse → marshal the final envelope and return it.
+//
+// Panics raised anywhere inside the lifecycle are recovered: the result is
+// rewritten to "I001" and a valid response is still returned, so the caller
+// never has to deal with nil headers/body even after a recovered panic.
 func (r *Request) HandleRequest(api *API) (code int, content []byte, headers map[string]string) {
 	r.api = api
 
@@ -78,7 +101,15 @@ func (r *Request) HandleRequest(api *API) (code int, content []byte, headers map
 	return r.makeResponse()
 }
 
-// return an HTTP response for the current request result
+// makeResponse serializes the current request state into the JSON envelope
+// the API always returns: {id, code, time, message, data}.
+//
+// If r.ResultCode is not present in the codes table, the envelope falls
+// back to "I002" so the HTTP layer never panics on an unknown code (the
+// resource's data is still attached, only the message/HTTPCode change).
+//
+// The CORS, cache-control and content-type headers are wide-open by design
+// — this library targets pure JSON APIs that sit behind their own gateway.
 func (r *Request) makeResponse() (int, []byte, map[string]string) {
 	r.Logger.Printf("starting the response assemble... [code: %v]", r.ResultCode)
 
@@ -121,7 +152,18 @@ func (r *Request) makeResponse() (int, []byte, map[string]string) {
 	return code.HTTPCode, content, headers
 }
 
-// determine the requested route and resource
+// determineResource matches r.Path and r.Method against the route table and
+// stores the matching Resource on r.Resource.
+//
+// Result codes set by this stage:
+//
+//   - "G001" — path is unknown.
+//   - "G002" — path exists but the method does not, and the request is an
+//     OPTIONS preflight (returned with HTTP 202 so CORS handshakes succeed
+//     even on resources that do not declare the verb explicitly).
+//   - "G003" — path exists but the method is not declared.
+//
+// On success the result code is left untouched (the caller starts at "OK").
 func (r *Request) determineResource() {
 
 	// check for route existence
@@ -154,7 +196,19 @@ func (r *Request) determineResource() {
 
 }
 
-// parse the Authorization bearer token from the headers if required
+// parseAuthentication enforces the `Authorization: Bearer <token>` header
+// when the matched resource declares authentication=true.
+//
+// It only extracts and stores the raw token on r.Token — verifying the token
+// (looking up the user, checking expiry, etc.) is the application's job and
+// belongs in RequestPreMethod.
+//
+// Result codes set by this stage:
+//
+//   - "G006" — header is missing or empty.
+//   - "G007" — header is present but not in the `Bearer <token>` form.
+//
+// No-ops when the result code is already non-OK or the resource is public.
 func (r *Request) parseAuthentication() {
 	if r.ResultCode != "OK" || !r.Resource.Authentication {
 		return
@@ -189,7 +243,25 @@ func (r *Request) parseAuthentication() {
 
 }
 
-// extract and parse parameters from URL query and body payload
+// parsePayload is the parameter pipeline. It runs only when the request has
+// reached this stage with a clean state and the resource declares at least
+// one parameter.
+//
+// The pipeline has three steps, each in its own helper:
+//
+//  1. decodeBody — parse r.Input into a map according to InputFormat.
+//  2. lookupParameter — for each declared parameter, fetch the raw value
+//     from its declared source (body or query).
+//  3. validateParameter — check the kind, convert string-typed inputs to
+//     the declared Go type and apply max_length / enum option checks.
+//
+// Required parameters that are absent are collected in `missing`; parameters
+// that fail validation are collected in `invalid`. If either list ends up
+// non-empty the request short-circuits with "G005" and both lists are
+// attached to the response data, so the client knows exactly what to fix.
+//
+// On success r.Parameters is set to the validated map, ready for the
+// resource method to consume.
 func (r *Request) parsePayload() {
 	if r.ResultCode != "OK" || len(r.Resource.Parameters) == 0 {
 		return
@@ -197,134 +269,38 @@ func (r *Request) parsePayload() {
 
 	r.Logger.Println("starting the parse of the request payload...")
 
-	var err error
-
-	// parse the body parameters
-	var bodyKeys []string
-	bodyParameters := make(map[string]any)
-
-	if len(r.Input) > 0 {
-		r.Logger.Println("this request got an body input")
-
-		// parse the input data into an interface
-		err = json.Unmarshal(r.Input, &bodyParameters)
-		if err != nil {
-			r.ResultCode = "G004"
-			return
-		}
-
-		// check if the inputted body is an associative map
-		if !baseutils.IsMap(bodyParameters) {
-			r.ResultCode = "G004"
-			return
-		}
-
-		// determine the keys passed on the body
-		for _, v := range reflect.ValueOf(bodyParameters).MapKeys() {
-			bodyKeys = append(bodyKeys, v.String())
-		}
-
+	// decode the body according to input_format
+	bodyParameters, ok := r.decodeBody()
+	if !ok {
+		return
 	}
 
-	// validate the type of each resource parameter
+	// validate every declared parameter
 	parameters := make(map[string]any)
 
 	var missing []ResourceParameter
 	var invalid []ResourceParameter
 
 	for _, v := range r.Resource.Parameters {
-
-		// check if the param is on the recieved keys
-		var methodParams *map[string]any
-
-		if !slices.Contains(bodyKeys, v.Name) {
-			r.Logger.Printf("parameter missing at the body payload [param: %v]", v.Name)
-
-			missing = append(missing, v)
+		rawValue, present := r.lookupParameter(v, bodyParameters)
+		if !present {
+			if v.Required {
+				r.Logger.Printf("parameter missing [param: %v] [getFrom: %v]", v.Name, v.GetFrom)
+				missing = append(missing, v)
+			}
 			continue
 		}
 
-		methodParams = &bodyParameters
-
-		// check if the informed value is of required type
-		switch (*methodParams)[v.Name].(type) {
-		case string:
-			if v.Kind != "string" && v.Kind != "enum" {
-				invalid = append(invalid, v)
-				continue
-			} else if (*methodParams)[v.Name].(string) == "" && v.Required {
-				invalid = append(invalid, v)
-				continue
-			}
-
-			if v.MaxLength > 0 && utf8.RuneCountInString((*methodParams)[v.Name].(string)) > v.MaxLength {
-				r.Logger.Printf("parameter exceeded maximum length [param: %v] [maxLength: %v] [length: %v]", v.Name, v.MaxLength, utf8.RuneCountInString((*methodParams)[v.Name].(string)))
-
-				invalid = append(invalid, v)
-				continue
-			}
-		case bool:
-			if v.Kind != "bool" {
-				invalid = append(invalid, v)
-				continue
-			}
-		case int, int8, int16, int32, int64, float32, float64:
-			isInteger := true
-			switch f := (*methodParams)[v.Name].(type) {
-			case float64:
-				isInteger = f == math.Trunc(f)
-			case float32:
-				isInteger = float64(f) == math.Trunc(float64(f))
-			}
-
-			if v.Kind != "integer" && v.Kind != "float" {
-				invalid = append(invalid, v)
-				continue
-			} else if v.Kind == "integer" && !isInteger {
-				invalid = append(invalid, v)
-				continue
-			}
-		case []string, []any:
-			if v.Kind != "array" {
-				invalid = append(invalid, v)
-				continue
-			}
-		case map[string]any:
-			if v.Kind != "map" {
-				invalid = append(invalid, v)
-				continue
-			}
-		default:
-			if (*methodParams)[v.Name] != nil && v.Required {
-				invalid = append(invalid, v)
-				continue
-			}
+		validatedValue, ok := r.validateParameter(v, rawValue)
+		if !ok {
+			invalid = append(invalid, v)
+			continue
 		}
 
-		// perform param data check for the "enum" type
-		if v.Kind == "enum" {
-			strVal, ok := (*methodParams)[v.Name].(string)
-			if !ok {
-				// the value is nil (null in JSON) — for optional params this passes through as nil;
-				// for required params it was already flagged by the default branch of the type switch
-				continue
-			}
-
-			if !slices.Contains(v.Options, strVal) {
-				r.Logger.Printf("parameter got an value that does not match the ENUM available ones [param: %v] [recieved: %v]", v.Name, strVal)
-
-				invalid = append(invalid, v)
-				continue
-			}
-		}
-
-		// append this value into the parameters section
-		parameters[v.Name] = (*methodParams)[v.Name]
-
+		parameters[v.Name] = validatedValue
 		r.Logger.Printf("sucessfully extracted and parsed parameter [parameter: %v]", v.Name)
 	}
 
-	// return the parameters that failed the verification
 	if len(invalid) > 0 || len(missing) > 0 {
 		r.Logger.Printf("this request has invalid or missing parameters [invalid: %v] [missing: %v]", len(invalid), len(missing))
 
@@ -336,18 +312,255 @@ func (r *Request) parsePayload() {
 			Missing: &missing,
 			Invalid: &invalid,
 		}
-
 		return
 	}
 
-	// assign the parsed body on the request
 	r.Parameters = &parameters
-
 	r.Logger.Printf("sucessfully parsed body payload [available: %v]", len(*r.Parameters))
-
 }
 
-// call the resource method function
+// decodeBody parses the request body into a map[string]any according to the
+// resource's InputFormat. Returns false (and sets the error code) if the body
+// cannot be decoded.
+//
+// For input_format=form, values may be []any (multi-valued keys) or string.
+// For input_format=json, values are whatever JSON yields (string, float64,
+// bool, []any, map[string]any).
+//
+// If no parameter declares get_from=body, the body is not parsed at all and
+// an empty map is returned.
+func (r *Request) decodeBody() (map[string]any, bool) {
+	needsBody := false
+	for _, p := range r.Resource.Parameters {
+		if p.GetFrom == "body" {
+			needsBody = true
+			break
+		}
+	}
+
+	if !needsBody {
+		return map[string]any{}, true
+	}
+
+	if len(r.Input) == 0 {
+		return map[string]any{}, true
+	}
+
+	switch r.Resource.InputFormat {
+	case "json":
+		var parsed map[string]any
+		if err := json.Unmarshal(r.Input, &parsed); err != nil {
+			r.ResultCode = "G004"
+			return nil, false
+		}
+		if !baseutils.IsMap(parsed) {
+			r.ResultCode = "G004"
+			return nil, false
+		}
+		return parsed, true
+
+	case "form":
+		values, err := url.ParseQuery(string(r.Input))
+		if err != nil {
+			r.ResultCode = "G008"
+			return nil, false
+		}
+
+		out := make(map[string]any, len(values))
+		for k, vs := range values {
+			if len(vs) == 1 {
+				out[k] = vs[0]
+			} else {
+				arr := make([]any, len(vs))
+				for i, s := range vs {
+					arr[i] = s
+				}
+				out[k] = arr
+			}
+		}
+		return out, true
+	}
+
+	// unreachable: NewAPI rejects invalid input_format at boot
+	r.ResultCode = "I003"
+	return nil, false
+}
+
+// lookupParameter returns the raw value of a parameter from the appropriate
+// source (body or query) and whether it was present.
+//
+// For query-sourced parameters, the value is always a string (since
+// http query strings are always strings).
+func (r *Request) lookupParameter(p ResourceParameter, body map[string]any) (any, bool) {
+	switch p.GetFrom {
+	case "query":
+		v, ok := r.Query[p.Name]
+		if !ok {
+			return nil, false
+		}
+		return v, true
+	case "body":
+		v, ok := body[p.Name]
+		if !ok {
+			return nil, false
+		}
+		return v, true
+	}
+	return nil, false
+}
+
+// validateParameter checks the raw value against the declared kind and
+// returns the value (possibly converted) plus whether it is valid.
+//
+// Conversions for string-typed inputs (form / query):
+//   - kind=integer  : strconv.ParseInt
+//   - kind=float    : strconv.ParseFloat
+//   - kind=bool     : "true"/"false"/"1"/"0" (case-insensitive)
+//   - kind=enum     : value must be in p.Options
+//   - kind=array    : []any of strings (only valid coming from form)
+//   - kind=map      : not allowed for string sources (boot rejects)
+func (r *Request) validateParameter(p ResourceParameter, raw any) (any, bool) {
+	isStringSource := p.GetFrom == "query" ||
+		(p.GetFrom == "body" && r.Resource.InputFormat == "form")
+
+	switch p.Kind {
+	case "string":
+		s, ok := raw.(string)
+		if !ok {
+			return nil, false
+		}
+		if s == "" && p.Required {
+			return nil, false
+		}
+		if p.MaxLength > 0 && utf8.RuneCountInString(s) > p.MaxLength {
+			r.Logger.Printf("parameter exceeded maximum length [param: %v] [maxLength: %v] [length: %v]", p.Name, p.MaxLength, utf8.RuneCountInString(s))
+			return nil, false
+		}
+		return s, true
+
+	case "enum":
+		s, ok := raw.(string)
+		if !ok {
+			if p.Required {
+				return nil, false
+			}
+			return nil, true
+		}
+		if !slices.Contains(p.Options, s) {
+			r.Logger.Printf("parameter got an value that does not match the ENUM available ones [param: %v] [recieved: %v]", p.Name, s)
+			return nil, false
+		}
+		return s, true
+
+	case "integer":
+		if isStringSource {
+			s, ok := raw.(string)
+			if !ok {
+				return nil, false
+			}
+			n, err := strconv.ParseInt(s, 10, 64)
+			if err != nil {
+				return nil, false
+			}
+			return n, true
+		}
+		switch f := raw.(type) {
+		case float64:
+			if f != math.Trunc(f) {
+				return nil, false
+			}
+			return int64(f), true
+		case float32:
+			if float64(f) != math.Trunc(float64(f)) {
+				return nil, false
+			}
+			return int64(f), true
+		case int, int8, int16, int32, int64:
+			return f, true
+		}
+		return nil, false
+
+	case "float":
+		if isStringSource {
+			s, ok := raw.(string)
+			if !ok {
+				return nil, false
+			}
+			f, err := strconv.ParseFloat(s, 64)
+			if err != nil {
+				return nil, false
+			}
+			return f, true
+		}
+		switch f := raw.(type) {
+		case float64, float32, int, int8, int16, int32, int64:
+			return f, true
+		}
+		return nil, false
+
+	case "bool":
+		if isStringSource {
+			s, ok := raw.(string)
+			if !ok {
+				return nil, false
+			}
+			switch strings.ToLower(s) {
+			case "true", "1":
+				return true, true
+			case "false", "0":
+				return false, true
+			}
+			return nil, false
+		}
+		b, ok := raw.(bool)
+		if !ok {
+			return nil, false
+		}
+		return b, true
+
+	case "array":
+		switch v := raw.(type) {
+		case []any:
+			return v, true
+		case []string:
+			arr := make([]any, len(v))
+			for i, s := range v {
+				arr[i] = s
+			}
+			return arr, true
+		case string:
+			if isStringSource {
+				return []any{v}, true
+			}
+		}
+		return nil, false
+
+	case "map":
+		m, ok := raw.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		return m, true
+	}
+
+	return nil, false
+}
+
+// callMethod dispatches to the application function bound to
+// r.Resource.ResourceMethod and stores the returned (data, code) pair on
+// the request.
+//
+// Behavior notes:
+//
+//   - Skipped entirely if the result code is already non-OK (so a failed
+//     parse / auth never reaches the application).
+//   - "I003" is set when the resource declares a function name that the
+//     application's method map does not contain — this is a configuration
+//     bug, not a client error.
+//   - Panics inside the application function are recovered and rewritten to
+//     "I001" with the panic value attached as response data; the surrounding
+//     RequestPostMethod still runs so transactions can be rolled back.
+//   - An empty result code returned by the application is treated as "OK".
 func (r *Request) callMethod() {
 	if r.ResultCode != "OK" {
 		return

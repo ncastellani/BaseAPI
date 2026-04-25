@@ -78,6 +78,13 @@
             "en-us": "The token at the 'Authorization' header must be prefixed by 'Bearer'.",
             "pt-br": "O token no cabeçalho 'Authorization' deve ser prefixado por 'Bearer'."
         }
+    },
+    "G008": {
+        "status": 406,
+        "message": {
+            "en-us": "The passed input data is not a valid form-encoded payload.",
+            "pt-br": "O dado de entrada enviado não é um payload form-encoded válido."
+        }
     }
 
 }
