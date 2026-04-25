@@ -391,6 +391,12 @@ func (r *Request) decodeBody() (map[string]any, bool) {
 //
 // For query-sourced parameters, the value is always a string (since
 // http query strings are always strings).
+//
+// For body-sourced parameters, an explicit JSON `null` is treated as
+// absence — the same as omitting the key entirely. This means clients
+// can send optional fields as `null` without tripping the type validator,
+// and required fields sent as `null` are reported under `missing` (which
+// is the more accurate error class) instead of `invalid`.
 func (r *Request) lookupParameter(p ResourceParameter, body map[string]any) (any, bool) {
 	switch p.GetFrom {
 	case "query":
@@ -401,7 +407,7 @@ func (r *Request) lookupParameter(p ResourceParameter, body map[string]any) (any
 		return v, true
 	case "body":
 		v, ok := body[p.Name]
-		if !ok {
+		if !ok || v == nil {
 			return nil, false
 		}
 		return v, true
