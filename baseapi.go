@@ -1,11 +1,11 @@
 package baseapi
 
 import (
+	"encoding/json"
 	"io"
 	"log"
+	"os"
 	"slices"
-
-	"github.com/ncastellani/baseutils"
 )
 
 // API is the immutable runtime handle returned by NewAPI. It bundles the
@@ -35,15 +35,9 @@ type API struct {
 // NewAPI parses the routes and codes JSON files at the given paths, wires up
 // the application method map and returns a ready-to-serve API.
 //
-// Boot-time invariants — any failure aborts construction with a non-nil err:
-//
-//  1. Both JSON files must parse (ErrFailedToImportRoutes / ErrFailedToImportCodes).
-//  2. The routes file must declare an `index` route with a `GET` method
-//     (ErrNoIndexRoute).
-//  3. The codes file must define every code in requiredCodes (ErrNoRequiredCode).
-//  4. Every route declaration must pass validateResource — well-formed
-//     input_format, function name, parameter list and cross-field rules
-//     (ErrInvalidRoute / ErrInvalidParameter).
+// This is a thin wrapper around NewAPIFromBytes — it reads both files from
+// disk and forwards their contents. See NewAPIFromBytes for the full list
+// of boot-time invariants and error semantics.
 //
 // Parameters:
 //   - routes, codes: filesystem paths to the JSON config files.
@@ -52,40 +46,74 @@ type API struct {
 //   - writer: destination for the boot logger and every per-request logger.
 //   - hostData: prefix strings that get joined with a Unix timestamp and the
 //     incoming request ID to form the per-request correlation identifier.
-func NewAPI(routes, codes string, methods Methods, writer io.Writer, hostData []string) (api API, err error) {
+func NewAPI(routes, codes string, methods Methods, writer io.Writer, hostData []string) (API, error) {
+	l := log.New(writer, "", log.LstdFlags|log.Lmsgprefix)
+
+	l.Printf("reading routes JSON file from path [path: %v]", routes)
+	routesJSON, err := os.ReadFile(routes)
+	if err != nil {
+		l.Printf("failed to read routes JSON file [err: %v]", err)
+		return API{}, ErrFailedToImportRoutes
+	}
+
+	l.Printf("reading codes JSON file from path [path: %v]", codes)
+	codesJSON, err := os.ReadFile(codes)
+	if err != nil {
+		l.Printf("failed to read codes JSON file [err: %v]", err)
+		return API{}, ErrFailedToImportCodes
+	}
+
+	return NewAPIFromBytes(routesJSON, codesJSON, methods, writer, hostData)
+}
+
+// NewAPIFromBytes is the in-memory counterpart of NewAPI. It accepts the
+// routes and codes JSON already loaded as byte slices, which is convenient
+// for callers that embed the JSON files into the binary via the standard
+// "embed" package.
+//
+// Boot-time invariants — any failure aborts construction with a non-nil err:
+//
+//  1. Both JSON payloads must parse (ErrFailedToImportRoutes /
+//     ErrFailedToImportCodes).
+//  2. The routes payload must declare an `index` route with a `GET` method
+//     (ErrNoIndexRoute).
+//  3. The codes payload must define every code in requiredCodes
+//     (ErrNoRequiredCode).
+//  4. Every route declaration must pass validateResource — well-formed
+//     input_format, function name, parameter list and cross-field rules
+//     (ErrInvalidRoute / ErrInvalidParameter).
+func NewAPIFromBytes(routesJSON, codesJSON []byte, methods Methods, writer io.Writer, hostData []string) (api API, err error) {
 
 	api.writer = writer
 	api.methods = methods
 	api.hostData = hostData
 
-	// setup a debug logger
+	// setup a boot debug logger
 	l := log.New(writer, "", log.LstdFlags|log.Lmsgprefix)
 
 	l.Println("setting up a new API handler...")
 
-	// load the API routes to the application
-	l.Println("importing routes JSON file from the passed path...")
+	// parse the routes JSON payload
+	l.Println("parsing the routes JSON payload...")
 
-	err = baseutils.ParseJSONFile(routes, &api.routes)
-	if err != nil {
-		l.Printf("failed to import routes JSON file [err: %v]", err)
+	if err = json.Unmarshal(routesJSON, &api.routes); err != nil {
+		l.Printf("failed to parse routes JSON [err: %v]", err)
 
 		err = ErrFailedToImportRoutes
 		return
 	}
 
-	// import the API codes
-	l.Println("importing codes JSON file from the passed path...")
+	// parse the codes JSON payload
+	l.Println("parsing the codes JSON payload...")
 
-	err = baseutils.ParseJSONFile(codes, &api.codes)
-	if err != nil {
-		l.Printf("failed to import codes JSON file [err: %v]", err)
+	if err = json.Unmarshal(codesJSON, &api.codes); err != nil {
+		l.Printf("failed to parse codes JSON [err: %v]", err)
 
 		err = ErrFailedToImportCodes
 		return
 	}
 
-	l.Println("configuration file parsed and imported! validating minimum requirements...")
+	l.Println("configuration parsed and imported! validating minimum requirements...")
 
 	// check if there is a index route and if it has a GET method
 	if v, ok := api.routes["index"]; !ok {
@@ -102,7 +130,7 @@ func NewAPI(routes, codes string, methods Methods, writer io.Writer, hostData []
 		}
 	}
 
-	// check for the codes used at the at lib
+	// check for the codes used at the lib
 	for _, code := range requiredCodes {
 		if _, ok := api.codes[code]; !ok {
 			l.Printf("a required application code does not exist [code: %v]", code)
