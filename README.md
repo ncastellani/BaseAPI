@@ -20,6 +20,7 @@ Requires Go 1.26+ (uses the standard `slices` package).
 package main
 
 import (
+	"log"
 	"net/http"
 	"os"
 
@@ -35,11 +36,16 @@ func main() {
 		"index": index,
 	}
 
+	// base logger — its writer, prefix and flags are preserved, and each
+	// per-request logger appends a "[ID][Path] " suffix to the prefix. Use a
+	// distinct prefix per API when several run in the same process.
+	logger := log.New(os.Stdout, "[my-service] ", log.LstdFlags|log.Lmsgprefix)
+
 	api, err := baseapi.NewAPI(
 		"./config/routes.json", // route declarations
 		"./config/codes.json",  // result code table
 		methods,                // application dispatch table
-		os.Stdout,              // log writer
+		logger,                 // base logger
 		[]string{"my-service"}, // host data prefix for request IDs
 	)
 	if err != nil {

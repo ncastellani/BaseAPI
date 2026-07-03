@@ -5,7 +5,7 @@ import "fmt"
 // Boot-time errors returned by NewAPI. Each one corresponds to a single
 // failure mode so the caller can branch on the exact cause if needed.
 // Detailed context (path, method, parameter name, etc.) is always written
-// to the configured writer before the error is returned.
+// to the configured logger before the error is returned.
 var (
 	// ErrFailedToImportRoutes — the routes JSON file failed to parse.
 	ErrFailedToImportRoutes = fmt.Errorf("failed to import the routes JSON file. check the logs for more details")

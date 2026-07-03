@@ -2,7 +2,6 @@ package baseapi
 
 import (
 	"encoding/json"
-	"io"
 	"log"
 	"os"
 	"slices"
@@ -10,7 +9,7 @@ import (
 
 // API is the immutable runtime handle returned by NewAPI. It bundles the
 // parsed route table, the result-code table, the application's method map
-// and the I/O writer used by the per-request loggers.
+// and the base logger from which the per-request loggers are derived.
 //
 // The two middleware fields (RequestPreMethod and RequestPostMethod) are
 // the only fields that callers are expected to reassign after construction:
@@ -21,7 +20,7 @@ import (
 //   - RequestPostMethod runs unconditionally after the resource method
 //     returns (or panics). Typical use: commit/rollback a transaction.
 type API struct {
-	writer   io.Writer
+	logger   *log.Logger
 	methods  Methods
 	hostData []string
 	codes    map[string]Code
@@ -43,11 +42,15 @@ type API struct {
 //   - routes, codes: filesystem paths to the JSON config files.
 //   - methods: map from resource function name to the Go function the
 //     dispatcher should invoke for that resource.
-//   - writer: destination for the boot logger and every per-request logger.
+//   - logger: base logger for the boot phase; every per-request logger is
+//     derived from it (its writer, prefix and flags are preserved and the
+//     per-request "[ID][Path] " suffix is appended to the prefix). Pass a
+//     logger with your own prefix to distinguish several APIs sharing a
+//     process.
 //   - hostData: prefix strings that get joined with a Unix timestamp and the
 //     incoming request ID to form the per-request correlation identifier.
-func NewAPI(routes, codes string, methods Methods, writer io.Writer, hostData []string) (API, error) {
-	l := log.New(writer, "", log.LstdFlags|log.Lmsgprefix)
+func NewAPI(routes, codes string, methods Methods, logger *log.Logger, hostData []string) (API, error) {
+	l := logger
 
 	l.Printf("reading routes JSON file from path [path: %v]", routes)
 	routesJSON, err := os.ReadFile(routes)
@@ -63,7 +66,7 @@ func NewAPI(routes, codes string, methods Methods, writer io.Writer, hostData []
 		return API{}, ErrFailedToImportCodes
 	}
 
-	return NewAPIFromBytes(routesJSON, codesJSON, methods, writer, hostData)
+	return NewAPIFromBytes(routesJSON, codesJSON, methods, logger, hostData)
 }
 
 // NewAPIFromBytes is the in-memory counterpart of NewAPI. It accepts the
@@ -82,14 +85,15 @@ func NewAPI(routes, codes string, methods Methods, writer io.Writer, hostData []
 //  4. Every route declaration must pass validateResource — well-formed
 //     input_format, function name, parameter list and cross-field rules
 //     (ErrInvalidRoute / ErrInvalidParameter).
-func NewAPIFromBytes(routesJSON, codesJSON []byte, methods Methods, writer io.Writer, hostData []string) (api API, err error) {
+func NewAPIFromBytes(routesJSON, codesJSON []byte, methods Methods, logger *log.Logger, hostData []string) (api API, err error) {
 
-	api.writer = writer
+	api.logger = logger
 	api.methods = methods
 	api.hostData = hostData
 
-	// setup a boot debug logger
-	l := log.New(writer, "", log.LstdFlags|log.Lmsgprefix)
+	// boot debug logger — reuse the caller-supplied logger so boot messages
+	// carry the same prefix/flags as the per-request loggers
+	l := logger
 
 	l.Println("setting up a new API handler...")
 

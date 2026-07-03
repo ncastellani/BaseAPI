@@ -55,8 +55,13 @@ func (r *Request) HandleRequest(api *API) (code int, content []byte, headers map
 	// base64 encode the request ID
 	r.ID = base64.StdEncoding.EncodeToString([]byte(r.ID))
 
-	// assemble a logger
-	r.Logger = log.New(r.api.writer, fmt.Sprintf("[%v][%v] ", r.ID, r.Path), log.LstdFlags|log.Lmsgprefix)
+	// assemble a logger derived from the API's base logger: keep its writer
+	// and flags, and append the per-request "[ID][Path] " suffix to its prefix
+	r.Logger = log.New(
+		r.api.logger.Writer(),
+		r.api.logger.Prefix()+fmt.Sprintf("[%v][%v] ", r.ID, r.Path),
+		r.api.logger.Flags(),
+	)
 
 	// handle panic at request operators calls
 	defer func() {
