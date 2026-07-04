@@ -46,6 +46,7 @@ func main() {
 		"./config/codes.json",  // result code table
 		methods,                // application dispatch table
 		logger,                 // base logger
+		false,                  // quietBoot: true hides the boot/config logs
 		[]string{"my-service"}, // host data prefix for request IDs
 	)
 	if err != nil {

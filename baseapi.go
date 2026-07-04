@@ -2,6 +2,7 @@ package baseapi
 
 import (
 	"encoding/json"
+	"io"
 	"log"
 	"os"
 	"slices"
@@ -31,6 +32,18 @@ type API struct {
 	RequestPostMethod func(r *Request)
 }
 
+// bootLogger returns the logger used for boot/configuration messages. When
+// quiet is true the messages are dropped (io.Discard); otherwise the
+// caller-supplied logger is used as-is so boot output matches the per-request
+// loggers' prefix and flags.
+func bootLogger(logger *log.Logger, quiet bool) *log.Logger {
+	if quiet {
+		return log.New(io.Discard, "", 0)
+	}
+
+	return logger
+}
+
 // NewAPI parses the routes and codes JSON files at the given paths, wires up
 // the application method map and returns a ready-to-serve API.
 //
@@ -47,10 +60,13 @@ type API struct {
 //     per-request "[ID][Path] " suffix is appended to the prefix). Pass a
 //     logger with your own prefix to distinguish several APIs sharing a
 //     process.
+//   - quietBoot: when true, the boot/configuration messages ("setting up a
+//     new API handler...", route validation, etc.) are suppressed. The
+//     per-request loggers are unaffected and keep writing normally.
 //   - hostData: prefix strings that get joined with a Unix timestamp and the
 //     incoming request ID to form the per-request correlation identifier.
-func NewAPI(routes, codes string, methods Methods, logger *log.Logger, hostData []string) (API, error) {
-	l := logger
+func NewAPI(routes, codes string, methods Methods, logger *log.Logger, quietBoot bool, hostData []string) (API, error) {
+	l := bootLogger(logger, quietBoot)
 
 	l.Printf("reading routes JSON file from path [path: %v]", routes)
 	routesJSON, err := os.ReadFile(routes)
@@ -66,13 +82,14 @@ func NewAPI(routes, codes string, methods Methods, logger *log.Logger, hostData 
 		return API{}, ErrFailedToImportCodes
 	}
 
-	return NewAPIFromBytes(routesJSON, codesJSON, methods, logger, hostData)
+	return NewAPIFromBytes(routesJSON, codesJSON, methods, logger, quietBoot, hostData)
 }
 
 // NewAPIFromBytes is the in-memory counterpart of NewAPI. It accepts the
 // routes and codes JSON already loaded as byte slices, which is convenient
 // for callers that embed the JSON files into the binary via the standard
-// "embed" package.
+// "embed" package. See NewAPI for the meaning of logger, quietBoot and
+// hostData.
 //
 // Boot-time invariants — any failure aborts construction with a non-nil err:
 //
@@ -85,15 +102,16 @@ func NewAPI(routes, codes string, methods Methods, logger *log.Logger, hostData 
 //  4. Every route declaration must pass validateResource — well-formed
 //     input_format, function name, parameter list and cross-field rules
 //     (ErrInvalidRoute / ErrInvalidParameter).
-func NewAPIFromBytes(routesJSON, codesJSON []byte, methods Methods, logger *log.Logger, hostData []string) (api API, err error) {
+func NewAPIFromBytes(routesJSON, codesJSON []byte, methods Methods, logger *log.Logger, quietBoot bool, hostData []string) (api API, err error) {
 
 	api.logger = logger
 	api.methods = methods
 	api.hostData = hostData
 
 	// boot debug logger — reuse the caller-supplied logger so boot messages
-	// carry the same prefix/flags as the per-request loggers
-	l := logger
+	// carry the same prefix/flags as the per-request loggers, unless quietBoot
+	// asks for them to be discarded
+	l := bootLogger(logger, quietBoot)
 
 	l.Println("setting up a new API handler...")
 
