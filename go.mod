@@ -7,3 +7,5 @@ require (
 	github.com/pocketbase/dbx v1.12.0
 	gopkg.in/guregu/null.v4 v4.0.0
 )
+
+require github.com/aws/aws-lambda-go v1.54.0
