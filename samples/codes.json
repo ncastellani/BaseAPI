@@ -85,6 +85,13 @@
             "en-us": "The passed input data is not a valid form-encoded payload.",
             "pt-br": "O dado de entrada enviado não é um payload form-encoded válido."
         }
+    },
+    "G009": {
+        "status": 504,
+        "message": {
+            "en-us": "The request took too long to be handled or was cancelled before it could be completed.",
+            "pt-br": "A requisição demorou demais para ser processada ou foi cancelada antes de ser concluída."
+        }
     }
 
 }

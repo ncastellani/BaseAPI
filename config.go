@@ -31,10 +31,12 @@ var (
 	ErrInvalidParameter = fmt.Errorf("a parameter is invalid. check the logs for more details")
 )
 
-// requiredCodes lists the result codes the library itself emits. The
-// codes JSON file must declare every one of them or NewAPI refuses to
-// boot. Application-defined codes can live alongside these without
-// restrictions.
+// requiredCodes lists the result codes NewAPI refuses to boot without. The
+// library emits other codes too — the routing ones (G001/G002/G003), the
+// authentication ones (G006/G007) and the cancellation one (G009) — and a
+// codes file that omits them still boots, at the cost of those responses
+// falling back to "I002". Application-defined codes can live alongside
+// these without restrictions.
 var requiredCodes = []string{"OK", "I001", "I002", "I003", "G004", "G005", "G008"}
 
 // validInputFormats are the accepted values for Resource.InputFormat.

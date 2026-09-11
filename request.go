@@ -1,6 +1,7 @@
 package baseapi
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -28,14 +29,21 @@ import (
 //     base64-encode it and assemble the request logger.
 //  2. Parse the User-Agent into r.Agent.
 //  3. determineResource → match the route + method, populate r.Resource.
-//  4. parseAuthentication → enforce the Bearer token if the resource declares
+//  4. applyResourceTimeout → narrow the request context with the resource's
+//     declared `timeout`, when it declares one.
+//  5. parseAuthentication → enforce the Bearer token if the resource declares
 //     authentication=true.
-//  5. parsePayload → decode and validate parameters into r.Parameters.
-//  6. RequestPreMethod (only if ResultCode is still "OK") → application hook
+//  6. parsePayload → decode and validate parameters into r.Parameters.
+//  7. RequestPreMethod (only if ResultCode is still "OK") → application hook
 //     for transaction setup, user loading, etc.
-//  7. callMethod → dispatch to the resource function.
-//  8. RequestPostMethod → unconditional cleanup hook (commit/rollback, etc.).
-//  9. makeResponse → marshal the final envelope and return it.
+//  8. callMethod → dispatch to the resource function.
+//  9. RequestPostMethod → unconditional cleanup hook (commit/rollback, etc.).
+//  10. makeResponse → marshal the final envelope and return it.
+//
+// The context attached by the transport (see Request.SetContext) bounds
+// stages 5 through 9. RequestPostMethod runs with it as well, so cleanup
+// work that must survive a cancelled request should use
+// Request.CleanupContext instead of Request.Context.
 //
 // Panics raised anywhere inside the lifecycle are recovered: the result is
 // rewritten to "I001" and a valid response is still returned, so the caller
@@ -87,6 +95,12 @@ func (r *Request) HandleRequest(api *API) (code int, content []byte, headers map
 	r.Logger.Printf("request recieved. handling... [method: %v] [IP: %v]", r.Method, r.IP)
 
 	r.determineResource()
+
+	// narrow the request context to the resource's declared budget; the
+	// cancel function is released once the whole lifecycle is over
+	cancel := r.applyResourceTimeout()
+	defer cancel()
+
 	r.parseAuthentication()
 	r.parsePayload()
 
@@ -199,6 +213,31 @@ func (r *Request) determineResource() {
 
 	r.Logger.Println("resource and method exists!")
 
+}
+
+// applyResourceTimeout narrows the request context to the budget declared by
+// the matched resource (`timeout`, in milliseconds) and returns the cancel
+// function the caller must defer.
+//
+// It is a no-op — returning a cancel function that does nothing, never nil —
+// when the resource declares no timeout or no resource was matched at all
+// (unknown route, undeclared method). Because the new context derives from
+// the transport's context, a deadline already carried by the transport (an
+// AWS Lambda invocation deadline, for instance) still wins when it is the
+// earlier of the two.
+func (r *Request) applyResourceTimeout() context.CancelFunc {
+	if r.Resource.Timeout <= 0 {
+		return func() {}
+	}
+
+	d := time.Duration(r.Resource.Timeout) * time.Millisecond
+
+	r.Logger.Printf("applying the resource declared timeout [timeout: %v]", d)
+
+	ctx, cancel := context.WithTimeout(r.Context(), d)
+	r.ctx = ctx
+
+	return cancel
 }
 
 // parseAuthentication enforces the `Authorization: Bearer <token>` header
@@ -565,6 +604,9 @@ func (r *Request) validateParameter(p ResourceParameter, raw any) (any, bool) {
 //
 //   - Skipped entirely if the result code is already non-OK (so a failed
 //     parse / auth never reaches the application).
+//   - "G009" is set when the request context is already done before the
+//     dispatch — the client hung up or the resource's timeout elapsed during
+//     parsing or RequestPreMethod. The application function is not called.
 //   - "I003" is set when the resource declares a function name that the
 //     application's method map does not contain — this is a configuration
 //     bug, not a client error.
@@ -574,6 +616,15 @@ func (r *Request) validateParameter(p ResourceParameter, raw any) (any, bool) {
 //   - An empty result code returned by the application is treated as "OK".
 func (r *Request) callMethod() {
 	if r.ResultCode != "OK" {
+		return
+	}
+
+	// do not dispatch a request that ran out of time (or whose client went
+	// away) while parsing or running the pre-method middleware
+	if err := r.Context().Err(); err != nil {
+		r.Logger.Printf("the request context is done before the method dispatch [err: %v]", err)
+
+		r.ResultCode = "G009"
 		return
 	}
 

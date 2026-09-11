@@ -1,6 +1,7 @@
 package baseapi
 
 import (
+	"context"
 	"encoding/base64"
 	"io"
 	"net/http"
@@ -27,6 +28,9 @@ import (
 //   - Headers / Query: only the first value of each key is kept (the
 //     library's parameter model is single-valued by design; multi-valued
 //     form bodies still flow through the form parser, not the query map).
+//   - Context: the incoming *http.Request context is attached to the
+//     baseapi.Request, so resource methods get cancellation for free when
+//     the client disconnects (see Request.Context).
 //   - ResultCode: pre-seeded to "OK" so the lifecycle starts in a good
 //     state.
 //
@@ -79,12 +83,16 @@ func HandleHTTPServerRequests(w http.ResponseWriter, e *http.Request, api *API) 
 		Method:  e.Method,
 		Path:    path,
 		Input:   input,
-		Context: map[string]any{},
+		Values:  map[string]any{},
 
 		// set the request result as OK
 		ResultCode: "OK",
 		ResultData: baseutils.Empty,
 	}
+
+	// bind the incoming request context so the lifecycle is cancelled when
+	// the client goes away
+	r.SetContext(e.Context())
 
 	// call the request handler
 	code, content, headers := r.HandleRequest(api)
@@ -102,10 +110,29 @@ func HandleHTTPServerRequests(w http.ResponseWriter, e *http.Request, api *API) 
 	r.Logger.Println("DONE!")
 }
 
-// HandleLambdaAPIGatewayRequests is the AWS Lambda adapter for API Gateway
-// (REST API, Lambda proxy integration) requests. Wire it as the Lambda
-// handler and it will translate the event into a baseapi.Request, run the
-// lifecycle and return the API Gateway proxy response.
+// HandleLambdaAPIGatewayRequests is the context-less AWS Lambda adapter,
+// kept for callers wired as `lambda.Start(func(e events.APIGatewayProxyRequest) ...)`.
+// It forwards to HandleLambdaAPIGatewayRequestsWithContext with a background
+// context, which means the resource methods cannot observe the invocation
+// deadline.
+//
+// Deprecated: take the context Lambda hands to the handler and call
+// HandleLambdaAPIGatewayRequestsWithContext instead, so the invocation
+// deadline bounds the request.
+func HandleLambdaAPIGatewayRequests(e events.APIGatewayProxyRequest, api *API) (events.APIGatewayProxyResponse, error) {
+	return HandleLambdaAPIGatewayRequestsWithContext(context.Background(), e, api)
+}
+
+// HandleLambdaAPIGatewayRequestsWithContext is the AWS Lambda adapter for API
+// Gateway (REST API, Lambda proxy integration) requests. Wire it as the
+// Lambda handler and it will translate the event into a baseapi.Request, run
+// the lifecycle and return the API Gateway proxy response.
+//
+// The ctx Lambda passes to the handler is attached to the request, so the
+// invocation deadline (and anything else the runtime put in it, such as the
+// lambdacontext data) reaches the resource methods through
+// Request.Context. A resource `timeout` shorter than the remaining
+// invocation time still wins; a longer one is capped by the deadline.
 //
 // Request-shaping details:
 //
@@ -120,7 +147,7 @@ func HandleHTTPServerRequests(w http.ResponseWriter, e *http.Request, api *API) 
 // Response-shaping details: all headers returned by HandleRequest are
 // copied to the API Gateway response, and an extra `x-request-id` header
 // is appended so the client can echo it back in support requests.
-func HandleLambdaAPIGatewayRequests(e events.APIGatewayProxyRequest, api *API) (events.APIGatewayProxyResponse, error) {
+func HandleLambdaAPIGatewayRequestsWithContext(ctx context.Context, e events.APIGatewayProxyRequest, api *API) (events.APIGatewayProxyResponse, error) {
 
 	// assemble the request
 	r := Request{
@@ -129,12 +156,15 @@ func HandleLambdaAPIGatewayRequests(e events.APIGatewayProxyRequest, api *API) (
 		Headers: e.Headers,
 		Query:   e.QueryStringParameters,
 		Method:  e.RequestContext.HTTPMethod,
-		Context: map[string]any{},
+		Values:  map[string]any{},
 
 		// set the request result as OK
 		ResultCode: "OK",
 		ResultData: baseutils.Empty,
 	}
+
+	// bind the invocation context so its deadline bounds the lifecycle
+	r.SetContext(ctx)
 
 	// parse the path for getting the action
 	r.Path = "index"

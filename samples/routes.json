@@ -6,6 +6,7 @@
             "input_format": "json",
             "authentication": false,
             "setup_transaction": false,
+            "timeout": 0,
             "parameters": []
         }
     },

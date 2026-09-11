@@ -1,7 +1,9 @@
 package baseapi
 
 import (
+	"context"
 	"log"
+	"time"
 
 	"github.com/pocketbase/dbx"
 	"gopkg.in/guregu/null.v4"
@@ -34,13 +36,17 @@ type Code struct {
 //   - IP, Headers, Query, Path, Method, Input: set by the transport adapter.
 //   - Token: set by parseAuthentication when the resource requires auth.
 //   - Agent: set by HandleRequest from the User-Agent header.
+//   - ctx: set by the transport adapter through SetContext and narrowed by
+//     HandleRequest when the resource declares a timeout. Always read it
+//     through the Context method, never assume the field is non-nil.
 //   - Resource, Parameters: set by determineResource / parsePayload.
-//   - DB, User, Context: free-form slots for application middlewares.
+//   - DB, User, Values: free-form slots for application middlewares.
 //   - ResultData, ResultCode: written by the resource method (or by an
 //     earlier failing stage). Initialize ResultCode to "OK" when building
 //     the request.
 type Request struct {
 	api    *API
+	ctx    context.Context
 	Logger *log.Logger
 
 	// general request data
@@ -59,13 +65,61 @@ type Request struct {
 	Parameters *map[string]any
 
 	// application data
-	DB      *dbx.Tx
-	User    any
-	Context map[string]any
+	DB     *dbx.Tx
+	User   any
+	Values map[string]any
 
 	// method response
 	ResultData any
 	ResultCode string
+}
+
+// Context returns the context that bounds this request. It is never nil:
+// when no transport supplied one it falls back to context.Background().
+//
+// Pass it down to every call that accepts a context.Context — database
+// drivers, HTTP clients, SDKs. It is cancelled when the client goes away
+// (for transports that report it) and when the deadline declared by the
+// resource's `timeout` elapses, whichever comes first.
+func (r *Request) Context() context.Context {
+	if r.ctx == nil {
+		return context.Background()
+	}
+
+	return r.ctx
+}
+
+// SetContext replaces the context that bounds this request. Nil contexts are
+// ignored so a careless caller can never strip the request of its context.
+//
+// Transport adapters call it while assembling the Request (this is the only
+// way an adapter living outside this package can attach its context), and
+// middlewares call it to enrich the context with request-scoped values such
+// as the authenticated user or a tracing span.
+func (r *Request) SetContext(ctx context.Context) {
+	if ctx != nil {
+		r.ctx = ctx
+	}
+}
+
+// Canceled reports whether the request context is already done — the client
+// disconnected or the resource's timeout elapsed. Resource methods can use
+// it to tell "the database refused the write" from "we ran out of time"
+// before deciding which result code to return.
+func (r *Request) Canceled() bool {
+	return r.Context().Err() != nil
+}
+
+// CleanupContext derives a context that is detached from the request's
+// cancellation and carries its own deadline. Use it for the work that must
+// run to completion even when the request itself was cancelled — committing
+// or rolling back a transaction, releasing a lock, flushing an audit record
+// — typically from RequestPostMethod.
+//
+// The returned cancel function must always be called; the request context's
+// values (trace IDs and the like) are preserved.
+func (r *Request) CleanupContext(d time.Duration) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(r.Context()), d)
 }
 
 // Resource is one declared entry in routes.json — a (path, method) pair
@@ -81,12 +135,18 @@ type Request struct {
 //     `Authorization: Bearer <token>` header.
 //   - SetupTransaction: advisory flag for the application's RequestPreMethod
 //     middleware — the library itself does not open a transaction.
+//   - Timeout: optional per-resource budget in milliseconds. When greater
+//     than zero, HandleRequest narrows the request context with
+//     context.WithTimeout before running the middlewares and the resource
+//     method. Zero means "no deadline of our own" (the transport's deadline,
+//     if any, still applies).
 //   - Parameters: list of declared parameters; validated at boot.
 type Resource struct {
 	ResourceMethod   string              `json:"function"`          // application map into a API function
 	InputFormat      string              `json:"input_format"`      // body parser to use (json/form)
 	Authentication   bool                `json:"authentication"`    // if a Authorization header (bearer token) should be at the request
 	SetupTransaction bool                `json:"setup_transaction"` // if a DB transaction must be open for requests on this resource
+	Timeout          int                 `json:"timeout"`           // optional context deadline for this resource, in milliseconds (0 = none)
 	Parameters       []ResourceParameter `json:"parameters"`        // acceptable parameters for this action
 }
 

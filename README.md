@@ -74,6 +74,11 @@ Map of `path → method → resource`. Every resource must declare:
   `Authorization: Bearer <token>` header.
 - `setup_transaction` — advisory flag your `RequestPreMethod` middleware
   can use to decide when to open a DB transaction.
+- `timeout` — optional deadline for the resource, in **milliseconds**. When
+  greater than zero the request context is narrowed with
+  `context.WithTimeout` before the middlewares and the resource function
+  run. `0` (or an absent field) means the resource imposes no deadline of
+  its own; a negative value is rejected at boot.
 - `parameters` — list of declared parameters (may be empty).
 
 Each parameter must declare:
@@ -145,9 +150,10 @@ The library reserves the following codes — they must all be declared in
 | `G006` | `Authorization` header missing on a protected route.    |
 | `G007` | `Authorization` header not in `Bearer <token>` format.  |
 | `G008` | Form-urlencoded body could not be decoded.              |
+| `G009` | Request context done before the dispatch (timeout or client gone). |
 
-`G001`, `G002`, `G003`, `G006`, `G007` are emitted by the library but not
-listed in `requiredCodes`; the framework still expects them when the
+`G001`, `G002`, `G003`, `G006`, `G007`, `G009` are emitted by the library but
+not listed in `requiredCodes`; the framework still expects them when the
 matching condition fires, so declare them too.
 
 Sample files for both `routes.json` and `codes.json` live in
@@ -183,6 +189,76 @@ the declared `kind`:
 - `array` → `[]any`
 - `map` → `map[string]any`
 
+## Request context
+
+Every request carries a `context.Context`. Read it with `r.Context()` — it is
+never `nil` — and hand it to every call that takes one:
+
+```go
+func getWidget(r *baseapi.Request) (any, string) {
+	var w Widget
+
+	// guregu/dynamo v2, aws-sdk-go-v2, database/sql, net/http clients —
+	// they all want the request context
+	if err := table.Get("ID", (*r.Parameters)["id"]).One(r.Context(), &w); err != nil {
+		if r.Canceled() {
+			return nil, "G009" // ran out of time / client hung up
+		}
+
+		r.Logger.Printf("failed to fetch the widget [err: %v]", err)
+		return nil, "I001"
+	}
+
+	return w, "OK"
+}
+```
+
+Where the context comes from:
+
+| Transport                                    | Context source                                      |
+| -------------------------------------------- | --------------------------------------------------- |
+| `HandleHTTPServerRequests`                   | the incoming `*http.Request` context — cancelled when the client disconnects |
+| `HandleLambdaAPIGatewayRequestsWithContext`  | the invocation context — carries the Lambda deadline |
+| `HandleLambdaAPIGatewayRequests`             | `context.Background()` (deprecated, no deadline)     |
+| your own adapter                             | whatever you pass to `r.SetContext(ctx)`             |
+
+The resource's `timeout` is then applied on top of it with
+`context.WithTimeout`, so the effective deadline is always the **earlier** of
+the two: a `timeout` longer than the remaining Lambda invocation time cannot
+outlive the invocation, and a shorter one wins over it.
+
+If the context is already done when the dispatch is about to happen — the
+client gave up while the body was being parsed, or `RequestPreMethod` burned
+the budget — the resource function is **not called** and the request
+short-circuits with `G009`. `RequestPostMethod` still runs, so transactions
+are never left dangling.
+
+For AWS Lambda, wire the context-aware adapter:
+
+```go
+lambda.Start(func(ctx context.Context, e events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
+	return baseapi.HandleLambdaAPIGatewayRequestsWithContext(ctx, e, &api)
+})
+```
+
+Writing your own transport adapter? Build the `Request` and attach the
+context before calling `HandleRequest`:
+
+```go
+r := baseapi.Request{ /* ID, IP, Headers, Query, Path, Method, Input... */ }
+r.SetContext(ctx)
+
+code, content, headers := r.HandleRequest(&api)
+```
+
+### Request-scoped values
+
+`r.Values` (a `map[string]any`) is the free-form slot for request-scoped
+application state — it is *not* a context. Prefer it for data your own
+middlewares and resource functions share, and reserve `r.SetContext` for
+values that have to travel into libraries that only accept a
+`context.Context` (tracing spans, SDK middlewares).
+
 ## Application middlewares
 
 `API` exposes two hooks:
@@ -191,12 +267,30 @@ the declared `kind`:
   the resource function, but only when `r.ResultCode` is still `"OK"`.
   Use it to load the authenticated user from `r.Token`, open a DB
   transaction (and stash it in `r.DB`), inflate request-scoped state into
-  `r.Context`, etc.
+  `r.Values`, enrich the context through `r.SetContext`, etc.
 - `RequestPostMethod(r *Request)` — runs unconditionally after the
   resource function, even after a recovered panic. Use it to commit /
   rollback the transaction based on `r.ResultCode`, emit metrics, etc.
 
 Both default to no-ops; assign your own functions after `NewAPI` returns.
+
+`RequestPostMethod` runs while the request context is still in scope, which
+means a cancelled request hands it a dead context. Cleanup work must not
+inherit that cancellation — use `r.CleanupContext` for it:
+
+```go
+api.RequestPostMethod = func(r *baseapi.Request) {
+	// detached from the request cancellation, with a deadline of its own
+	ctx, cancel := r.CleanupContext(5 * time.Second)
+	defer cancel()
+
+	if r.ResultCode == "OK" {
+		commit(ctx, r.DB)
+	} else {
+		rollback(ctx, r.DB)
+	}
+}
+```
 
 ## Response envelope
 
@@ -226,7 +320,7 @@ client can render exactly which fields failed.
 | Codes JSON does not parse                            | `ErrFailedToImportCodes`   |
 | Missing `index` / `GET` route                        | `ErrNoIndexRoute`          |
 | Required code missing in codes file                  | `ErrNoRequiredCode`        |
-| Invalid `input_format`, HTTP method, or function     | `ErrInvalidRoute`          |
+| Invalid `input_format`, HTTP method, function, or negative `timeout` | `ErrInvalidRoute` |
 | Invalid parameter (kind, get_from, cross-field rule) | `ErrInvalidParameter`      |
 
 This is by design: misconfigured routes should crash the service at boot,
