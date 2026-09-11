@@ -37,11 +37,13 @@ import (
 //  7. RequestPreMethod (only if ResultCode is still "OK") → application hook
 //     for transaction setup, user loading, etc.
 //  8. callMethod → dispatch to the resource function.
-//  9. RequestPostMethod → unconditional cleanup hook (commit/rollback, etc.).
-//  10. makeResponse → marshal the final envelope and return it.
+//  9. applyCancellationResult → relabel a failure caused by a cancelled
+//     context as "G009".
+//  10. RequestPostMethod → unconditional cleanup hook (commit/rollback, etc.).
+//  11. makeResponse → marshal the final envelope and return it.
 //
 // The context attached by the transport (see Request.SetContext) bounds
-// stages 5 through 9. RequestPostMethod runs with it as well, so cleanup
+// stages 5 through 10. RequestPostMethod runs with it as well, so cleanup
 // work that must survive a cancelled request should use
 // Request.CleanupContext instead of Request.Context.
 //
@@ -112,12 +114,46 @@ func (r *Request) HandleRequest(api *API) (code int, content []byte, headers map
 	// call the API method
 	r.callMethod()
 
+	// reconcile a failure that was really a cancellation before the post
+	// method middleware decides to commit or to roll back
+	r.applyCancellationResult()
+
 	// always call the post method middleware so callers can perform cleanup
 	// (such as commit/rollback of transactions) regardless of the result code
 	r.api.RequestPostMethod(r)
 
 	// assemble the response
 	return r.makeResponse()
+}
+
+// applyCancellationResult rewrites the result code to "G009" when the request
+// context is done and the resource method reported a failure.
+//
+// This is the library-wide answer to cancellation: a resource method that
+// hands its r.Context() down to every call it makes does not have to test for
+// cancellation at all. When the deadline elapses or the client disconnects,
+// the underlying driver fails the call, the method returns whatever error code
+// it normally would, and this stage relabels it as the timeout it actually
+// was — so a cancelled request never shows up as a database or upstream
+// error in the client's response or in the metrics derived from it.
+//
+// A successful result is never rewritten: a method that managed to finish
+// before the context expired (or that deliberately ignored it) keeps its
+// "OK". Request.Canceled stays available for the rare method that wants to
+// branch on cancellation itself, and the original code is logged.
+//
+// It runs before RequestPostMethod so the cleanup hook sees the final code
+// and rolls back rather than commits.
+func (r *Request) applyCancellationResult() {
+	if r.ResultCode == "OK" || r.ResultCode == "G009" {
+		return
+	}
+
+	if err := r.Context().Err(); err != nil {
+		r.Logger.Printf("the request context is done; reporting it as a cancellation [original: %v] [err: %v]", r.ResultCode, err)
+
+		r.ResultCode = "G009"
+	}
 }
 
 // makeResponse serializes the current request state into the JSON envelope
@@ -220,17 +256,16 @@ func (r *Request) determineResource() {
 // function the caller must defer.
 //
 // It is a no-op — returning a cancel function that does nothing, never nil —
-// when the resource declares no timeout or no resource was matched at all
+// when the resource declares `timeout: 0` or no resource was matched at all
 // (unknown route, undeclared method). Because the new context derives from
 // the transport's context, a deadline already carried by the transport (an
 // AWS Lambda invocation deadline, for instance) still wins when it is the
 // earlier of the two.
 func (r *Request) applyResourceTimeout() context.CancelFunc {
-	if r.Resource.Timeout <= 0 {
+	d := r.Resource.TimeoutDuration()
+	if d == 0 {
 		return func() {}
 	}
-
-	d := time.Duration(r.Resource.Timeout) * time.Millisecond
 
 	r.Logger.Printf("applying the resource declared timeout [timeout: %v]", d)
 

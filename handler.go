@@ -110,23 +110,10 @@ func HandleHTTPServerRequests(w http.ResponseWriter, e *http.Request, api *API) 
 	r.Logger.Println("DONE!")
 }
 
-// HandleLambdaAPIGatewayRequests is the context-less AWS Lambda adapter,
-// kept for callers wired as `lambda.Start(func(e events.APIGatewayProxyRequest) ...)`.
-// It forwards to HandleLambdaAPIGatewayRequestsWithContext with a background
-// context, which means the resource methods cannot observe the invocation
-// deadline.
-//
-// Deprecated: take the context Lambda hands to the handler and call
-// HandleLambdaAPIGatewayRequestsWithContext instead, so the invocation
-// deadline bounds the request.
-func HandleLambdaAPIGatewayRequests(e events.APIGatewayProxyRequest, api *API) (events.APIGatewayProxyResponse, error) {
-	return HandleLambdaAPIGatewayRequestsWithContext(context.Background(), e, api)
-}
-
-// HandleLambdaAPIGatewayRequestsWithContext is the AWS Lambda adapter for API
-// Gateway (REST API, Lambda proxy integration) requests. Wire it as the
-// Lambda handler and it will translate the event into a baseapi.Request, run
-// the lifecycle and return the API Gateway proxy response.
+// HandleLambdaAPIGatewayRequests is the AWS Lambda adapter for API Gateway
+// (REST API, Lambda proxy integration) requests. Wire it as the Lambda
+// handler and it will translate the event into a baseapi.Request, run the
+// lifecycle and return the API Gateway proxy response.
 //
 // The ctx Lambda passes to the handler is attached to the request, so the
 // invocation deadline (and anything else the runtime put in it, such as the
@@ -147,7 +134,7 @@ func HandleLambdaAPIGatewayRequests(e events.APIGatewayProxyRequest, api *API) (
 // Response-shaping details: all headers returned by HandleRequest are
 // copied to the API Gateway response, and an extra `x-request-id` header
 // is appended so the client can echo it back in support requests.
-func HandleLambdaAPIGatewayRequestsWithContext(ctx context.Context, e events.APIGatewayProxyRequest, api *API) (events.APIGatewayProxyResponse, error) {
+func HandleLambdaAPIGatewayRequests(ctx context.Context, e events.APIGatewayProxyRequest, api *API) (events.APIGatewayProxyResponse, error) {
 
 	// assemble the request
 	r := Request{

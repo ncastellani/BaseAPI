@@ -198,8 +198,11 @@ func NewAPIFromBytes(routesJSON, codesJSON []byte, methods Methods, logger *log.
 //   - kind=map cannot live in a form-urlencoded body (no native nesting).
 //   - kind=enum must declare at least one option.
 //
-// It also rejects a negative `timeout`, which would otherwise yield a context
-// that is already expired by the time the resource method is dispatched.
+// It also requires every resource to declare a `timeout`: an absent field is
+// a declaration the author forgot rather than a deliberate "no deadline", so
+// only an explicit 0 opts out. A negative value is rejected as well — it
+// would yield a context that is already expired by the time the resource
+// method is dispatched.
 //
 // On the first failure, an error is returned (either ErrInvalidRoute or
 // ErrInvalidParameter) and the caller is expected to abort the boot.
@@ -228,9 +231,16 @@ func validateResource(l *log.Logger, path, method string, r Resource) error {
 		return ErrInvalidRoute
 	}
 
+	// the timeout must be spelled out on every resource; an explicit 0 is the
+	// only way to opt out of having a deadline
+	if r.Timeout == nil {
+		l.Printf("route is missing timeout [path: %v] [method: %v]", path, method)
+		return ErrInvalidRoute
+	}
+
 	// a negative timeout would expire the request context before dispatch
-	if r.Timeout < 0 {
-		l.Printf("route has a negative timeout [path: %v] [method: %v] [value: %v]", path, method, r.Timeout)
+	if *r.Timeout < 0 {
+		l.Printf("route has a negative timeout [path: %v] [method: %v] [value: %v]", path, method, *r.Timeout)
 		return ErrInvalidRoute
 	}
 

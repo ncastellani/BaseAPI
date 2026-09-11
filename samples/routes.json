@@ -17,6 +17,7 @@
             "input_format": "json",
             "authentication": true,
             "setup_transaction": true,
+            "timeout": 3000,
             "parameters": [
                 { "name": "queue", "kind": "enum", "get_from": "body", "required": true, "max_length": 0, "options": [ "opt1", "opt2" ] },
                 { "name": "key", "kind": "string", "get_from": "body", "required": true, "max_length": 0, "options": [] },
@@ -32,6 +33,7 @@
             "input_format": "form",
             "authentication": false,
             "setup_transaction": false,
+            "timeout": 5000,
             "parameters": [
                 { "name": "message_sid", "kind": "string", "get_from": "body", "required": true, "max_length": 64, "options": [] },
                 { "name": "message_status", "kind": "enum", "get_from": "body", "required": true, "max_length": 0, "options": [ "sent", "delivered", "read", "failed", "undelivered" ] },

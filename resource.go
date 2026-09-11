@@ -135,18 +135,20 @@ func (r *Request) CleanupContext(d time.Duration) (context.Context, context.Canc
 //     `Authorization: Bearer <token>` header.
 //   - SetupTransaction: advisory flag for the application's RequestPreMethod
 //     middleware — the library itself does not open a transaction.
-//   - Timeout: optional per-resource budget in milliseconds. When greater
+//   - Timeout: mandatory per-resource budget in milliseconds. It is a pointer
+//     so boot can tell an absent declaration from an explicit zero: every
+//     resource must spell it out, and 0 is the explicit "no deadline of our
+//     own" (the transport's deadline, if any, still applies). When greater
 //     than zero, HandleRequest narrows the request context with
 //     context.WithTimeout before running the middlewares and the resource
-//     method. Zero means "no deadline of our own" (the transport's deadline,
-//     if any, still applies).
+//     method. Read it through TimeoutDuration instead of dereferencing it.
 //   - Parameters: list of declared parameters; validated at boot.
 type Resource struct {
 	ResourceMethod   string              `json:"function"`          // application map into a API function
 	InputFormat      string              `json:"input_format"`      // body parser to use (json/form)
 	Authentication   bool                `json:"authentication"`    // if a Authorization header (bearer token) should be at the request
 	SetupTransaction bool                `json:"setup_transaction"` // if a DB transaction must be open for requests on this resource
-	Timeout          int                 `json:"timeout"`           // optional context deadline for this resource, in milliseconds (0 = none)
+	Timeout          *int                `json:"timeout"`           // required context deadline for this resource, in milliseconds (0 = none)
 	Parameters       []ResourceParameter `json:"parameters"`        // acceptable parameters for this action
 }
 
@@ -174,4 +176,18 @@ type ResourceParameter struct {
 	Required  bool     `json:"required"`   // is required
 	MaxLength int      `json:"max_length"` // if type STRING, validate its length
 	Options   []string `json:"options"`    // if type ENUM, this is a list of the available options
+}
+
+// TimeoutDuration returns the resource's declared timeout as a duration, or
+// zero when the resource opted out of having a deadline of its own.
+//
+// Boot rejects a resource whose timeout is absent or negative, so by the time
+// a request is served the pointer is always set and non-negative; the guards
+// here only keep a hand-built Resource from panicking.
+func (r Resource) TimeoutDuration() time.Duration {
+	if r.Timeout == nil || *r.Timeout <= 0 {
+		return 0
+	}
+
+	return time.Duration(*r.Timeout) * time.Millisecond
 }

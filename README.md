@@ -74,11 +74,11 @@ Map of `path → method → resource`. Every resource must declare:
   `Authorization: Bearer <token>` header.
 - `setup_transaction` — advisory flag your `RequestPreMethod` middleware
   can use to decide when to open a DB transaction.
-- `timeout` — optional deadline for the resource, in **milliseconds**. When
-  greater than zero the request context is narrowed with
-  `context.WithTimeout` before the middlewares and the resource function
-  run. `0` (or an absent field) means the resource imposes no deadline of
-  its own; a negative value is rejected at boot.
+- `timeout` — deadline for the resource, in **milliseconds**. When greater
+  than zero the request context is narrowed with `context.WithTimeout` before
+  the middlewares and the resource function run. **The field is mandatory on
+  every resource**: an absent `timeout` fails the boot, so opting out is an
+  explicit `0` and never an oversight. A negative value is rejected too.
 - `parameters` — list of declared parameters (may be empty).
 
 Each parameter must declare:
@@ -150,10 +150,10 @@ The library reserves the following codes — they must all be declared in
 | `G006` | `Authorization` header missing on a protected route.    |
 | `G007` | `Authorization` header not in `Bearer <token>` format.  |
 | `G008` | Form-urlencoded body could not be decoded.              |
-| `G009` | Request context done before the dispatch (timeout or client gone). |
+| `G009` | Request cancelled — timed out or the client went away.  |
 
-`G001`, `G002`, `G003`, `G006`, `G007`, `G009` are emitted by the library but
-not listed in `requiredCodes`; the framework still expects them when the
+`G001`, `G002`, `G003`, `G006`, `G007` are emitted by the library but not
+listed in `requiredCodes`; the framework still expects them when the
 matching condition fires, so declare them too.
 
 Sample files for both `routes.json` and `codes.json` live in
@@ -201,10 +201,7 @@ func getWidget(r *baseapi.Request) (any, string) {
 	// guregu/dynamo v2, aws-sdk-go-v2, database/sql, net/http clients —
 	// they all want the request context
 	if err := table.Get("ID", (*r.Parameters)["id"]).One(r.Context(), &w); err != nil {
-		if r.Canceled() {
-			return nil, "G009" // ran out of time / client hung up
-		}
-
+		// no cancellation check needed — see "Cancelled requests" below
 		r.Logger.Printf("failed to fetch the widget [err: %v]", err)
 		return nil, "I001"
 	}
@@ -215,31 +212,50 @@ func getWidget(r *baseapi.Request) (any, string) {
 
 Where the context comes from:
 
-| Transport                                    | Context source                                      |
-| -------------------------------------------- | --------------------------------------------------- |
-| `HandleHTTPServerRequests`                   | the incoming `*http.Request` context — cancelled when the client disconnects |
-| `HandleLambdaAPIGatewayRequestsWithContext`  | the invocation context — carries the Lambda deadline |
-| `HandleLambdaAPIGatewayRequests`             | `context.Background()` (deprecated, no deadline)     |
-| your own adapter                             | whatever you pass to `r.SetContext(ctx)`             |
+| Transport                         | Context source                                      |
+| --------------------------------- | --------------------------------------------------- |
+| `HandleHTTPServerRequests`        | the incoming `*http.Request` context — cancelled when the client disconnects |
+| `HandleLambdaAPIGatewayRequests`  | the invocation context — carries the Lambda deadline |
+| your own adapter                  | whatever you pass to `r.SetContext(ctx)`             |
 
 The resource's `timeout` is then applied on top of it with
 `context.WithTimeout`, so the effective deadline is always the **earlier** of
 the two: a `timeout` longer than the remaining Lambda invocation time cannot
 outlive the invocation, and a shorter one wins over it.
 
-If the context is already done when the dispatch is about to happen — the
-client gave up while the body was being parsed, or `RequestPreMethod` burned
-the budget — the resource function is **not called** and the request
-short-circuits with `G009`. `RequestPostMethod` still runs, so transactions
-are never left dangling.
-
-For AWS Lambda, wire the context-aware adapter:
+For AWS Lambda:
 
 ```go
 lambda.Start(func(ctx context.Context, e events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-	return baseapi.HandleLambdaAPIGatewayRequestsWithContext(ctx, e, &api)
+	return baseapi.HandleLambdaAPIGatewayRequests(ctx, e, &api)
 })
 ```
+
+### Cancelled requests
+
+Cancellation is handled by the lifecycle, not by each resource function. As
+long as you pass `r.Context()` down to the calls you make, you never have to
+test for it:
+
+- **Before the dispatch** — if the context is already done when the resource
+  function is about to be called (the client gave up while the body was being
+  parsed, or `RequestPreMethod` burned the budget), the function is **not
+  called** and the request short-circuits with `G009`.
+- **After the dispatch** — if the context is done and the resource function
+  returned a **failure** code, that code is **relabelled `G009`**. The driver
+  fails the call on a dead context, your function returns whatever error code
+  it normally would, and the envelope reports the timeout it actually was —
+  so cancellations never pollute your error codes or the metrics built on
+  them.
+- **Success is never relabelled** — a function that finished in time (or that
+  deliberately ignored the context) keeps its `"OK"`.
+- `RequestPostMethod` runs in every one of these cases, with the final code
+  already in `r.ResultCode`, so it rolls back instead of committing and no
+  transaction is left dangling.
+
+`r.Canceled()` is there for the rare function that wants to branch on
+cancellation itself — emit a different metric, skip a retry — not for
+routine error handling.
 
 Writing your own transport adapter? Build the `Request` and attach the
 context before calling `HandleRequest`:
@@ -320,7 +336,7 @@ client can render exactly which fields failed.
 | Codes JSON does not parse                            | `ErrFailedToImportCodes`   |
 | Missing `index` / `GET` route                        | `ErrNoIndexRoute`          |
 | Required code missing in codes file                  | `ErrNoRequiredCode`        |
-| Invalid `input_format`, HTTP method, function, or negative `timeout` | `ErrInvalidRoute` |
+| Invalid `input_format`, HTTP method or function; missing or negative `timeout` | `ErrInvalidRoute` |
 | Invalid parameter (kind, get_from, cross-field rule) | `ErrInvalidParameter`      |
 
 This is by design: misconfigured routes should crash the service at boot,
