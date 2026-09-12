@@ -4,8 +4,6 @@ import (
 	"context"
 	"log"
 	"time"
-
-	"gopkg.in/guregu/null.v4"
 )
 
 // Methods is the application-supplied dispatch table. The key is the
@@ -34,7 +32,8 @@ type Code struct {
 //   - api, Logger, ID (final form): set by HandleRequest.
 //   - IP, Headers, Query, Path, Method, Input: set by the transport adapter.
 //   - Token: set by parseAuthentication when the resource requires auth.
-//   - Agent: set by HandleRequest from the User-Agent header.
+//   - Agent: set by HandleRequest from the User-Agent header; empty when
+//     the client sent none. r.Headers keeps the raw value either way.
 //   - ctx: set by the transport adapter through SetContext and narrowed by
 //     HandleRequest when the resource declares a timeout. Always read it
 //     through the Context method, never assume the field is non-nil.
@@ -59,7 +58,7 @@ type Request struct {
 	Method  string
 	Input   []byte
 	Token   string
-	Agent   null.String
+	Agent   string
 
 	// asserted data
 	Resource   Resource

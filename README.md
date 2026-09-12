@@ -189,6 +189,22 @@ the declared `kind`:
 - `array` → `[]any`
 - `map` → `map[string]any`
 
+### Other request fields
+
+Besides the parameters, the `Request` carries the raw call data the
+lifecycle filled in — `r.ID` (correlation ID), `r.IP`, `r.Path`,
+`r.Method`, `r.Headers`, `r.Query`, `r.Input` (the unparsed body),
+`r.Token` (the bearer token, on authenticated resources) and `r.Agent`.
+
+`r.Agent` is a plain `string` holding the `User-Agent` header, empty when
+the client sent none. A client that sends the header with an empty value
+is indistinguishable from one that omits it; on the rare occasion that
+difference matters, read the header yourself — the raw map is right there:
+
+```go
+agent, sent := r.Headers["User-Agent"]
+```
+
 ## Request context
 
 Every request carries a `context.Context`. Read it with `r.Context()` — it is

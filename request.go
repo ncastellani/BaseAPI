@@ -15,7 +15,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/ncastellani/baseutils"
-	"gopkg.in/guregu/null.v4"
 )
 
 // HandleRequest is the request lifecycle entry point. The transport adapter
@@ -88,10 +87,10 @@ func (r *Request) HandleRequest(api *API) (code int, content []byte, headers map
 		}
 	}()
 
-	// parse User-Agent header
-	if agent, ok := r.Headers["User-Agent"]; ok {
-		r.Agent = null.StringFrom(agent)
-	}
+	// parse User-Agent header. An absent header and an empty one both leave
+	// Agent empty; read r.Headers directly on the rare occasion the
+	// difference matters.
+	r.Agent = r.Headers["User-Agent"]
 
 	// call the request operators
 	r.Logger.Printf("request recieved. handling... [method: %v] [IP: %v]", r.Method, r.IP)
