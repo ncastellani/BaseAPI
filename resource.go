@@ -5,7 +5,6 @@ import (
 	"log"
 	"time"
 
-	"github.com/pocketbase/dbx"
 	"gopkg.in/guregu/null.v4"
 )
 
@@ -40,7 +39,9 @@ type Code struct {
 //     HandleRequest when the resource declares a timeout. Always read it
 //     through the Context method, never assume the field is non-nil.
 //   - Resource, Parameters: set by determineResource / parsePayload.
-//   - DB, User, Values: free-form slots for application middlewares.
+//   - DB, User, Values: free-form slots for application middlewares. DB
+//     and User are untyped on purpose — this package never reads them,
+//     so the application picks its own types and asserts them back out.
 //   - ResultData, ResultCode: written by the resource method (or by an
 //     earlier failing stage). Initialize ResultCode to "OK" when building
 //     the request.
@@ -65,7 +66,7 @@ type Request struct {
 	Parameters *map[string]any
 
 	// application data
-	DB     *dbx.Tx
+	DB     any
 	User   any
 	Values map[string]any
 

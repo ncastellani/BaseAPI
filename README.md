@@ -290,6 +290,12 @@ values that have to travel into libraries that only accept a
 
 Both default to no-ops; assign your own functions after `NewAPI` returns.
 
+`r.DB` and `r.User` are both `any`: this library never reads them, never
+opens a transaction and has no database dependency of its own. Your
+middleware puts whatever it likes in there — a `*sql.Tx`, an ORM
+transaction, a repository bundle — and asserts it back out on the way in.
+The `setup_transaction` flag on a resource is advisory for exactly this.
+
 `RequestPostMethod` runs while the request context is still in scope, which
 means a cancelled request hands it a dead context. Cleanup work must not
 inherit that cancellation — use `r.CleanupContext` for it:
@@ -300,10 +306,17 @@ api.RequestPostMethod = func(r *baseapi.Request) {
 	ctx, cancel := r.CleanupContext(5 * time.Second)
 	defer cancel()
 
+	// r.DB is `any` — assert it back to whatever RequestPreMethod stored
+	// there. *sql.Tx here, but the library does not care which type it is.
+	tx, ok := r.DB.(*sql.Tx)
+	if !ok {
+		return // no transaction was opened for this resource
+	}
+
 	if r.ResultCode == "OK" {
-		commit(ctx, r.DB)
+		commit(ctx, tx)
 	} else {
-		rollback(ctx, r.DB)
+		rollback(ctx, tx)
 	}
 }
 ```
