@@ -189,6 +189,28 @@ the declared `kind`:
 - `array` → `[]any`
 - `map` → `map[string]any`
 
+## Request headers
+
+Read headers with `r.Header(name)` rather than indexing `r.Headers` directly:
+
+```go
+if v, ok := r.Header("X-Tenant-Id"); ok {
+	// ...
+}
+```
+
+HTTP header names are case-insensitive, but `r.Headers` is a plain
+`map[string]string` and each transport spells the keys its own way — `net/http`
+canonicalizes them (`Authorization`), API Gateway **REST** APIs preserve the
+casing the client sent, and API Gateway **HTTP** APIs lowercase all of them
+(`authorization`). `r.Header` matches the name case-insensitively, so the same
+code works behind every transport.
+
+The bundled adapters canonicalize the keys before handing the map over, so
+`r.Headers["Authorization"]` also works there; a custom adapter that skips
+that step is exactly what `r.Header` protects you from. The library itself
+uses it for `Authorization` (see `G006`/`G007`) and `User-Agent`.
+
 ## Request context
 
 Every request carries a `context.Context`. Read it with `r.Context()` — it is

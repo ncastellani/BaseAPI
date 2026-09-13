@@ -3,6 +3,8 @@ package baseapi
 import (
 	"context"
 	"log"
+	"net/textproto"
+	"strings"
 	"time"
 
 	"gopkg.in/guregu/null.v4"
@@ -88,6 +90,38 @@ func (r *Request) Context() context.Context {
 	}
 
 	return r.ctx
+}
+
+// Header returns the value of a request header, matching the name
+// case-insensitively, and reports whether it was present.
+//
+// HTTP header names are case-insensitive by specification, but the Headers
+// map is a plain map[string]string and every transport spells the keys its
+// own way: net/http canonicalizes them ("Authorization"), API Gateway REST
+// APIs keep whatever casing the client sent, and API Gateway HTTP APIs
+// lowercase all of them ("authorization"). The bundled adapters canonicalize
+// the keys before handing the map over, so a direct lookup usually hits on
+// the first try; this method is what makes the lookup correct anyway for
+// requests assembled by a custom adapter that does not.
+//
+// Prefer it over indexing Headers directly whenever the name matters.
+func (r *Request) Header(name string) (string, bool) {
+	if v, ok := r.Headers[name]; ok {
+		return v, true
+	}
+
+	if v, ok := r.Headers[textproto.CanonicalMIMEHeaderKey(name)]; ok {
+		return v, true
+	}
+
+	// the map is neither canonical nor an exact match: fall back to a scan
+	for k, v := range r.Headers {
+		if strings.EqualFold(k, name) {
+			return v, true
+		}
+	}
+
+	return "", false
 }
 
 // SetContext replaces the context that bounds this request. Nil contexts are
