@@ -89,7 +89,7 @@ func (r *Request) HandleRequest(api *API) (code int, content []byte, headers map
 	}()
 
 	// parse User-Agent header
-	if agent, ok := r.Headers["User-Agent"]; ok {
+	if agent, ok := r.Header("User-Agent"); ok {
 		r.Agent = null.StringFrom(agent)
 	}
 
@@ -278,6 +278,9 @@ func (r *Request) applyResourceTimeout() context.CancelFunc {
 // parseAuthentication enforces the `Authorization: Bearer <token>` header
 // when the matched resource declares authentication=true.
 //
+// The header is looked up through Request.Header, so the casing the
+// transport used for the key does not matter.
+//
 // It only extracts and stores the raw token on r.Token — verifying the token
 // (looking up the user, checking expiry, etc.) is the application's job and
 // belongs in RequestPreMethod.
@@ -298,7 +301,7 @@ func (r *Request) parseAuthentication() {
 	// check if the header Authorization was passed
 	var token string
 
-	if v, ok := r.Headers["Authorization"]; ok {
+	if v, ok := r.Header("Authorization"); ok {
 		token = v
 	} else {
 		r.Logger.Println("'Authorization' header is not present or does not holds any content")

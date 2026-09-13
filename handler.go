@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"io"
 	"net/http"
+	"net/textproto"
 	"strings"
 
 	"github.com/aws/aws-lambda-go/events"
@@ -28,6 +29,8 @@ import (
 //   - Headers / Query: only the first value of each key is kept (the
 //     library's parameter model is single-valued by design; multi-valued
 //     form bodies still flow through the form parser, not the query map).
+//     Header keys arrive canonicalized by net/http ("Authorization") and
+//     are kept that way.
 //   - Context: the incoming *http.Request context is attached to the
 //     baseapi.Request, so resource methods get cancellation for free when
 //     the client disconnects (see Request.Context).
@@ -54,18 +57,24 @@ func HandleHTTPServerRequests(w http.ResponseWriter, e *http.Request, api *API) 
 		ip = "127.0.0.1"
 	}
 
-	// iterate over the headers to get the first value
-	requestID := baseutils.RandomString(16, true, true, true)
-	headers := make(map[string]string)
-
+	// iterate over the headers to get the first value. the keys of an
+	// http.Header are already in canonical form ("Authorization"), which is
+	// the shape the rest of the library expects
+	headers := make(map[string]string, len(e.Header))
 	for k, v := range e.Header {
 		headers[k] = v[0]
-		switch k {
-		case "Fly-Request-Id":
-			requestID = headers[k]
-		case "Fly-Client-IP":
-			ip = headers[k]
-		}
+	}
+
+	// let the fly.io edge override the locally generated request ID and the
+	// IP taken from RemoteAddr. Header.Get canonicalizes the name it is
+	// given, so the lookup matches regardless of how the client spelled it
+	requestID := baseutils.RandomString(16, true, true, true)
+	if v := e.Header.Get("Fly-Request-Id"); v != "" {
+		requestID = v
+	}
+
+	if v := e.Header.Get("Fly-Client-IP"); v != "" {
+		ip = v
 	}
 
 	// iterate over the query string params to get the first value
@@ -126,6 +135,10 @@ func HandleHTTPServerRequests(w http.ResponseWriter, e *http.Request, api *API) 
 //   - Path: taken from the API Gateway request path, stripped of the
 //     leading slash; "/" becomes "index" so the mandatory index route
 //     serves the root.
+//   - Headers: the keys are canonicalized ("authorization" becomes
+//     "Authorization"). API Gateway HTTP APIs lowercase every header name
+//     they forward, REST APIs preserve the client's casing, so without this
+//     step the same request would be seen differently by each of them.
 //   - Input: the request body, Base64-decoded when API Gateway marks it
 //     as such (binary payloads).
 //   - ResultCode: pre-seeded to "OK" so the lifecycle starts in a good
@@ -136,11 +149,20 @@ func HandleHTTPServerRequests(w http.ResponseWriter, e *http.Request, api *API) 
 // is appended so the client can echo it back in support requests.
 func HandleLambdaAPIGatewayRequests(ctx context.Context, e events.APIGatewayProxyRequest, api *API) (events.APIGatewayProxyResponse, error) {
 
+	// canonicalize the header keys. API Gateway HTTP APIs lowercase every
+	// header name before the event reaches the function, while REST APIs
+	// keep the casing the client sent — normalizing here makes both flavours
+	// (and the net/http adapter, whose keys are canonical already) agree
+	headers := make(map[string]string, len(e.Headers))
+	for k, v := range e.Headers {
+		headers[textproto.CanonicalMIMEHeaderKey(k)] = v
+	}
+
 	// assemble the request
 	r := Request{
 		ID:      e.RequestContext.RequestID,
 		IP:      e.RequestContext.Identity.SourceIP,
-		Headers: e.Headers,
+		Headers: headers,
 		Query:   e.QueryStringParameters,
 		Method:  e.RequestContext.HTTPMethod,
 		Values:  map[string]any{},
