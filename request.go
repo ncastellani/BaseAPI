@@ -312,7 +312,7 @@ func (r *Request) parseAuthentication() {
 
 	// get the second element of the authorization header
 	authHeader := strings.Fields(token)
-	if len(authHeader) < 2 {
+	if len(authHeader) != 2 {
 		r.Logger.Println("the \"Authorization\" header is present but does not use the correct format")
 
 		r.ResultCode = "G007"
