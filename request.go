@@ -301,7 +301,7 @@ func (r *Request) parseAuthentication() {
 	// check if the header Authorization was passed
 	var token string
 
-	if v, ok := r.Header("Authorization"); ok {
+	if v, ok := r.Header("Authorization"); ok && strings.TrimSpace(v) != "" {
 		token = v
 	} else {
 		r.Logger.Println("'Authorization' header is not present or does not holds any content")
@@ -312,7 +312,7 @@ func (r *Request) parseAuthentication() {
 
 	// get the second element of the authorization header
 	authHeader := strings.Fields(token)
-	if len(authHeader) == 1 {
+	if len(authHeader) != 2 {
 		r.Logger.Println("the \"Authorization\" header is present but does not use the correct format")
 
 		r.ResultCode = "G007"
@@ -321,7 +321,14 @@ func (r *Request) parseAuthentication() {
 
 	r.Token = authHeader[1]
 
-	r.Logger.Printf("sucessfully obtained the authentication token [token: ...%v]", r.Token[len(r.Token)-4:])
+	// only log a suffix when the token is long enough for it not to give the
+	// token away (and to avoid slicing out of bounds on short tokens)
+	tokenHint := "****"
+	if len(r.Token) >= 8 {
+		tokenHint = "..." + r.Token[len(r.Token)-4:]
+	}
+
+	r.Logger.Printf("sucessfully obtained the authentication token [token: %v]", tokenHint)
 
 }
 
