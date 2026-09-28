@@ -166,6 +166,11 @@ func (r *Request) CleanupContext(d time.Duration) (context.Context, context.Canc
 //   - ResourceMethod: key into the application's Methods map; must be set.
 //   - InputFormat: "json" (associative JSON body) or "form"
 //     (application/x-www-form-urlencoded body). Required.
+//   - OutputFormat: "json" (the response envelope) or "xml" (the result data
+//     marshaled as the XML document itself, with no envelope, for consumers
+//     that expect their own root element, like Twilio's TwiML). Required.
+//     Only successful (2xx) answers follow it: failures keep the JSON
+//     envelope, as some come from the lifecycle before the method ran.
 //   - Authentication: when true, parseAuthentication enforces the
 //     `Authorization: Bearer <token>` header.
 //   - SetupTransaction: advisory flag for the application's RequestPreMethod
@@ -181,6 +186,7 @@ func (r *Request) CleanupContext(d time.Duration) (context.Context, context.Canc
 type Resource struct {
 	ResourceMethod   string              `json:"function"`          // application map into a API function
 	InputFormat      string              `json:"input_format"`      // body parser to use (json/form)
+	OutputFormat     string              `json:"output_format"`     // response encoder to use (json/xml)
 	Authentication   bool                `json:"authentication"`    // if a Authorization header (bearer token) should be at the request
 	SetupTransaction bool                `json:"setup_transaction"` // if a DB transaction must be open for requests on this resource
 	Timeout          *int                `json:"timeout"`           // required context deadline for this resource, in milliseconds (0 = none)
