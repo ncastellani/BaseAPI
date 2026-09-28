@@ -189,10 +189,10 @@ func NewAPIFromBytes(routesJSON, codesJSON []byte, methods Methods, logger *log.
 
 // validateResource ensures a single resource declaration is well-formed.
 //
-// It checks the resource-level fields (input_format, HTTP method, function
-// name) and then walks every declared parameter, validating the kind,
-// get_from, enum options and the cross-field rules that the parser relies on
-// at runtime:
+// It checks the resource-level fields (input_format, output_format, HTTP
+// method, function name) and then walks every declared parameter, validating
+// the kind, get_from, enum options and the cross-field rules that the parser
+// relies on at runtime:
 //
 //   - kind=map cannot be sourced from the query string (no native nesting).
 //   - kind=map cannot live in a form-urlencoded body (no native nesting).
@@ -216,6 +216,17 @@ func validateResource(l *log.Logger, path, method string, r Resource) error {
 
 	if !slices.Contains(validInputFormats, r.InputFormat) {
 		l.Printf("route has invalid input_format [path: %v] [method: %v] [value: %v]", path, method, r.InputFormat)
+		return ErrInvalidRoute
+	}
+
+	// output_format is required and must be one of the known encoders
+	if r.OutputFormat == "" {
+		l.Printf("route is missing output_format [path: %v] [method: %v]", path, method)
+		return ErrInvalidRoute
+	}
+
+	if !slices.Contains(validOutputFormats, r.OutputFormat) {
+		l.Printf("route has invalid output_format [path: %v] [method: %v] [value: %v]", path, method, r.OutputFormat)
 		return ErrInvalidRoute
 	}
 

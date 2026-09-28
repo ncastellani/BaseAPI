@@ -4,6 +4,7 @@
         "GET": {
             "function": "index",
             "input_format": "json",
+            "output_format": "json",
             "authentication": false,
             "setup_transaction": false,
             "timeout": 0,
@@ -15,6 +16,7 @@
         "POST": {
             "function": "send_event",
             "input_format": "json",
+            "output_format": "json",
             "authentication": true,
             "setup_transaction": true,
             "timeout": 3000,
@@ -31,6 +33,7 @@
         "POST": {
             "function": "webhook_form_example",
             "input_format": "form",
+            "output_format": "json",
             "authentication": false,
             "setup_transaction": false,
             "timeout": 5000,
@@ -39,6 +42,21 @@
                 { "name": "message_status", "kind": "enum", "get_from": "body", "required": true, "max_length": 0, "options": [ "sent", "delivered", "read", "failed", "undelivered" ] },
                 { "name": "error_code", "kind": "integer", "get_from": "body", "required": false, "max_length": 0, "options": [] },
                 { "name": "trace_id", "kind": "string", "get_from": "query", "required": false, "max_length": 64, "options": [] }
+            ]
+        }
+    },
+
+    "webhook_xml_example": {
+        "POST": {
+            "function": "webhook_xml_example",
+            "input_format": "form",
+            "output_format": "xml",
+            "authentication": false,
+            "setup_transaction": false,
+            "timeout": 5000,
+            "parameters": [
+                { "name": "From", "kind": "string", "get_from": "body", "required": true, "max_length": 32, "options": [] },
+                { "name": "Body", "kind": "string", "get_from": "body", "required": true, "max_length": 1600, "options": [] }
             ]
         }
     }

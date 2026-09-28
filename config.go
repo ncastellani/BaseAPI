@@ -22,7 +22,7 @@ var (
 	ErrNoRequiredCode = fmt.Errorf("a required application code is not set at the codes JSON file")
 
 	// ErrInvalidRoute — a route declaration failed validation
-	// (missing input_format, unknown HTTP method, missing function, etc.).
+	// (missing input_format/output_format, unknown HTTP method, missing function, etc.).
 	ErrInvalidRoute = fmt.Errorf("a route is invalid. check the logs for more details")
 
 	// ErrInvalidParameter — one of the parameters of a route failed
@@ -40,6 +40,9 @@ var requiredCodes = []string{"OK", "I001", "I002", "I003", "G004", "G005", "G008
 
 // validInputFormats are the accepted values for Resource.InputFormat.
 var validInputFormats = []string{"json", "form"}
+
+// validOutputFormats are the accepted values for Resource.OutputFormat.
+var validOutputFormats = []string{"json", "xml"}
 
 // validGetFrom are the accepted values for ResourceParameter.GetFrom.
 var validGetFrom = []string{"body", "query"}

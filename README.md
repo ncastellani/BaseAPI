@@ -70,6 +70,12 @@ Map of `path → method → resource`. Every resource must declare:
 - `function` — key into the `Methods` map.
 - `input_format` — `"json"` (associative JSON body) or `"form"`
   (`application/x-www-form-urlencoded`).
+- `output_format` — `"json"` answers the [response envelope](#response-envelope).
+  `"xml"` answers the data the resource function returned, marshaled with
+  `encoding/xml` as the document itself (no envelope), with
+  `Content-Type: application/xml`. Return a struct whose `XMLName` is the
+  root element your consumer expects — e.g. `<Response>` for Twilio TwiML.
+  A `nil` result answers an empty body.
 - `authentication` — when `true`, the request must carry an
   `Authorization: Bearer <token>` header.
 - `setup_transaction` — advisory flag your `RequestPreMethod` middleware
@@ -175,7 +181,8 @@ func sendEvent(r *baseapi.Request) (any, string) {
 A resource function receives the fully-validated request and returns
 `(data, code)`:
 
-- `data` becomes the `data` field of the JSON response envelope.
+- `data` becomes the `data` field of the JSON response envelope, or the
+  XML document itself on routes declaring `output_format: "xml"`.
 - `code` is looked up in `codes.json` to determine the HTTP status and the
   localized message. Returning the empty string is treated as `"OK"`.
 
@@ -345,7 +352,8 @@ api.RequestPostMethod = func(r *baseapi.Request) {
 
 ## Response envelope
 
-Every response — including errors — has the same shape:
+Every response — including errors, and except the successful answers of
+`output_format: "xml"` routes (below) — has the same shape:
 
 ```json
 {
@@ -361,6 +369,11 @@ For `G005` (validation failure), `data` is `{ "missing": [...], "invalid": [...]
 where each entry is the original `ResourceParameter` declaration, so the
 client can render exactly which fields failed.
 
+Routes declaring `output_format: "xml"` skip the envelope on successful (2xx)
+answers. Failures keep the JSON envelope above, since many of them (G005,
+authentication, unknown codes) are produced before the resource function runs.
+If the result cannot be marshaled to XML, the answer is an `I001` envelope.
+
 ## Boot-time validation
 
 `NewAPI` refuses to start if anything is off:
@@ -371,7 +384,7 @@ client can render exactly which fields failed.
 | Codes JSON does not parse                            | `ErrFailedToImportCodes`   |
 | Missing `index` / `GET` route                        | `ErrNoIndexRoute`          |
 | Required code missing in codes file                  | `ErrNoRequiredCode`        |
-| Invalid `input_format`, HTTP method or function; missing or negative `timeout` | `ErrInvalidRoute` |
+| Missing or invalid `input_format` / `output_format`, HTTP method or function; missing or negative `timeout` | `ErrInvalidRoute` |
 | Invalid parameter (kind, get_from, cross-field rule) | `ErrInvalidParameter`      |
 
 This is by design: misconfigured routes should crash the service at boot,

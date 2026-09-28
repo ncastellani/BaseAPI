@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/xml"
 	"fmt"
 	"log"
 	"math"
@@ -184,6 +185,26 @@ func (r *Request) makeResponse() (int, []byte, map[string]string) {
 		"Access-Control-Max-Age":       "86400",
 	}
 
+	// a route answering XML returns its data as the document itself, with no
+	// envelope: its consumers (webhooks like Twilio's) expect their own root
+	// element. failures keep the JSON envelope, as they may come from the
+	// lifecycle (G005, G007...) before the method ever ran
+	if r.Resource.OutputFormat == "xml" && code.HTTPCode >= 200 && code.HTTPCode < 300 {
+		content, err := r.marshalXML()
+		if err == nil {
+			headers["Content-Type"] = "application/xml; charset=utf-8"
+
+			r.Logger.Println("API XML response assembled. returning HTTP response...")
+
+			return code.HTTPCode, content, headers
+		}
+
+		r.Logger.Printf("failed to marshal the XML response [err: %v]", err)
+
+		r.ResultCode, r.ResultData = "I001", err.Error()
+		code = r.api.codes["I001"]
+	}
+
 	// assemble the request response with the code and provided data
 	response := struct {
 		ID      string            `json:"id"`
@@ -205,6 +226,26 @@ func (r *Request) makeResponse() (int, []byte, map[string]string) {
 	r.Logger.Println("API response assembled. returning HTTP response...")
 
 	return code.HTTPCode, content, headers
+}
+
+// marshalXML returns the XML document of the result data, prefixed by the
+// XML header. no data (nil, the lifecycle default, or a nil pointer) answers
+// an empty body
+func (r *Request) marshalXML() ([]byte, error) {
+	if r.ResultData == nil {
+		return []byte{}, nil
+	}
+
+	body, err := xml.Marshal(r.ResultData)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(body) == 0 {
+		return []byte{}, nil
+	}
+
+	return append([]byte(xml.Header), body...), nil
 }
 
 // determineResource matches r.Path and r.Method against the route table and
