@@ -365,6 +365,15 @@ Every response — including errors, and except the successful answers of
 }
 ```
 
+The `id` (also returned in the `x-request-id` response header) is
+`base64(hostData:unix-ts:raw-id)`, where the raw ID is `Fly-Request-Id` when
+present or a random string. When the request comes through AWS API Gateway,
+the `id` is instead the API Gateway request ID itself, verbatim — the same
+`x-amzn-RequestId` AWS returns and logs. The Lambda adapter reads it from the
+request context; the `net/http` adapter uses it when an `x-amzn-RequestId`
+header reaches the application (map `context.requestId` to that header in
+the API Gateway integration to forward it).
+
 For `G005` (validation failure), `data` is `{ "missing": [...], "invalid": [...] }`
 where each entry is the original `ResourceParameter` declaration, so the
 client can render exactly which fields failed.

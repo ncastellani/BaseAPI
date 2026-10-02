@@ -27,7 +27,8 @@ import (
 // The lifecycle is:
 //
 //  1. Build the per-request correlation ID (hostData ++ unix-ts ++ raw ID),
-//     base64-encode it and assemble the request logger.
+//     base64-encode it and assemble the request logger. An API Gateway
+//     request ID (x-amzn-RequestId) set by the adapters is kept verbatim.
 //  2. Parse the User-Agent into r.Agent.
 //  3. determineResource → match the route + method, populate r.Resource.
 //  4. applyResourceTimeout → narrow the request context with the resource's
@@ -54,17 +55,19 @@ import (
 func (r *Request) HandleRequest(api *API) (code int, content []byte, headers map[string]string) {
 	r.api = api
 
-	// join the host data with the request ID
-	requestHostData := make([]string, len(api.hostData))
-	copy(requestHostData, api.hostData)
+	// join the host data with the request ID and base64 encode it, unless
+	// the ID came from API Gateway: then it is kept as is, so it matches the
+	// x-amzn-RequestId AWS reports for the request
+	if !r.gatewayID {
+		requestHostData := make([]string, len(api.hostData))
+		copy(requestHostData, api.hostData)
 
-	requestHostData = append(requestHostData, fmt.Sprintf("%v", time.Now().Unix()))
-	requestHostData = append(requestHostData, r.ID)
+		requestHostData = append(requestHostData, fmt.Sprintf("%v", time.Now().Unix()))
+		requestHostData = append(requestHostData, r.ID)
 
-	r.ID = strings.Join(requestHostData, ":")
-
-	// base64 encode the request ID
-	r.ID = base64.StdEncoding.EncodeToString([]byte(r.ID))
+		r.ID = strings.Join(requestHostData, ":")
+		r.ID = base64.StdEncoding.EncodeToString([]byte(r.ID))
+	}
 
 	// assemble a logger derived from the API's base logger: keep its writer
 	// and flags, and append the per-request "[ID][Path] " suffix to its prefix

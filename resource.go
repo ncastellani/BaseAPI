@@ -52,6 +52,11 @@ type Request struct {
 	ctx    context.Context
 	Logger *log.Logger
 
+	// gatewayID marks ID as the upstream API Gateway request ID
+	// (x-amzn-RequestId), which HandleRequest keeps verbatim instead of
+	// composing the hostData correlation identifier around it
+	gatewayID bool
+
 	// general request data
 	ID      string
 	IP      string

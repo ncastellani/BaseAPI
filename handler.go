@@ -23,8 +23,11 @@ import (
 //     so the mandatory index route serves "/".
 //   - IP: taken from RemoteAddr, but Fly-Client-IP overrides it when
 //     present (transparent support for fly.io's edge).
-//   - Request ID: generated locally as a 16-char random string, but
-//     Fly-Request-Id overrides it when present so traces can be correlated
+//   - Request ID: when the request went through API Gateway and carries
+//     x-amzn-RequestId, that value is used verbatim as the request ID.
+//     Otherwise it is generated locally as a 16-char random string, with
+//     Fly-Request-Id overriding it when present, and wrapped into the
+//     hostData correlation identifier. Either way traces can be correlated
 //     across the edge and the application.
 //   - Headers / Query: only the first value of each key is kept (the
 //     library's parameter model is single-valued by design; multi-valued
@@ -65,11 +68,16 @@ func HandleHTTPServerRequests(w http.ResponseWriter, e *http.Request, api *API) 
 		headers[k] = v[0]
 	}
 
-	// let the fly.io edge override the locally generated request ID and the
-	// IP taken from RemoteAddr. Header.Get canonicalizes the name it is
-	// given, so the lookup matches regardless of how the client spelled it
+	// prefer the API Gateway request ID, then the fly.io edge one, over the
+	// locally generated request ID, and let fly.io override the IP taken
+	// from RemoteAddr. Header.Get canonicalizes the name it is given, so the
+	// lookup matches regardless of how the client spelled it
 	requestID := baseutils.RandomString(16, true, true, true)
-	if v := e.Header.Get("Fly-Request-Id"); v != "" {
+	gatewayID := false
+	if v := e.Header.Get("X-Amzn-Requestid"); v != "" {
+		requestID = v
+		gatewayID = true
+	} else if v := e.Header.Get("Fly-Request-Id"); v != "" {
 		requestID = v
 	}
 
@@ -97,6 +105,8 @@ func HandleHTTPServerRequests(w http.ResponseWriter, e *http.Request, api *API) 
 		// set the request result as OK
 		ResultCode: "OK",
 		ResultData: baseutils.Empty,
+
+		gatewayID: gatewayID,
 	}
 
 	// bind the incoming request context so the lifecycle is cancelled when
@@ -139,6 +149,11 @@ func HandleHTTPServerRequests(w http.ResponseWriter, e *http.Request, api *API) 
 //     "Authorization"). API Gateway HTTP APIs lowercase every header name
 //     they forward, REST APIs preserve the client's casing, so without this
 //     step the same request would be seen differently by each of them.
+//   - Request ID: the API Gateway request ID (the x-amzn-RequestId AWS
+//     returns to the client), used verbatim. It comes from the request
+//     context, falling back to an x-amzn-RequestId header when the context
+//     has none; without either, a random ID wrapped into the hostData
+//     correlation identifier is used, as in the net/http adapter.
 //   - Input: the request body, Base64-decoded when API Gateway marks it
 //     as such (binary payloads).
 //   - ResultCode: pre-seeded to "OK" so the lifecycle starts in a good
@@ -158,9 +173,20 @@ func HandleLambdaAPIGatewayRequests(ctx context.Context, e events.APIGatewayProx
 		headers[textproto.CanonicalMIMEHeaderKey(k)] = v
 	}
 
+	// use the API Gateway request ID as is, so it matches x-amzn-RequestId
+	requestID := e.RequestContext.RequestID
+	if requestID == "" {
+		requestID = headers["X-Amzn-Requestid"]
+	}
+
+	gatewayID := requestID != ""
+	if !gatewayID {
+		requestID = baseutils.RandomString(16, true, true, true)
+	}
+
 	// assemble the request
 	r := Request{
-		ID:      e.RequestContext.RequestID,
+		ID:      requestID,
 		IP:      e.RequestContext.Identity.SourceIP,
 		Headers: headers,
 		Query:   e.QueryStringParameters,
@@ -170,6 +196,8 @@ func HandleLambdaAPIGatewayRequests(ctx context.Context, e events.APIGatewayProx
 		// set the request result as OK
 		ResultCode: "OK",
 		ResultData: baseutils.Empty,
+
+		gatewayID: gatewayID,
 	}
 
 	// bind the invocation context so its deadline bounds the lifecycle

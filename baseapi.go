@@ -65,6 +65,8 @@ func bootLogger(logger *log.Logger, quiet bool) *log.Logger {
 //     per-request loggers are unaffected and keep writing normally.
 //   - hostData: prefix strings that get joined with a Unix timestamp and the
 //     incoming request ID to form the per-request correlation identifier.
+//     Not applied when the request ID is an API Gateway x-amzn-RequestId,
+//     which is kept verbatim.
 func NewAPI(routes, codes string, methods Methods, logger *log.Logger, quietBoot bool, hostData []string) (API, error) {
 	l := bootLogger(logger, quietBoot)
 
