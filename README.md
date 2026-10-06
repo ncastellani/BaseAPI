@@ -186,6 +186,31 @@ A resource function receives the fully-validated request and returns
 - `code` is looked up in `codes.json` to determine the HTTP status and the
   localized message. Returning the empty string is treated as `"OK"`.
 
+### Redirecting
+
+To answer an HTTP redirect, set `r.RedirectTo` and return a successful code:
+
+```go
+func authorize(r *baseapi.Request) (any, string) {
+	// ... do the work ...
+
+	r.RedirectTo = "https://app.example.com/callback?state=xyz"
+	return nil, "OK"
+}
+```
+
+The response is then a `302 Found` with `Location` set to that URL, an empty
+body and `Cache-Control: no-store` — whatever the route's `output_format`, and
+with the returned data ignored. The CORS headers and `x-request-id` are kept.
+
+- Only absolute `http` / `https` URLs with a host are accepted. A relative
+  path, another scheme (`javascript:`, `data:`...) or a malformed URL answers
+  an `I001` envelope instead.
+- The redirect is only honoured when the final result is successful (2xx).
+  If the function returns a failure code, panics, the request is cancelled
+  (`G009`) or `RequestPostMethod` changes the code to a failure, the regular
+  JSON envelope is returned.
+
 The validated parameters live in `*r.Parameters`. Their Go types follow
 the declared `kind`:
 
@@ -352,8 +377,9 @@ api.RequestPostMethod = func(r *baseapi.Request) {
 
 ## Response envelope
 
-Every response — including errors, and except the successful answers of
-`output_format: "xml"` routes (below) — has the same shape:
+Every response — including errors, and except [redirects](#redirecting) and
+the successful answers of `output_format: "xml"` routes (below) — has the same
+shape:
 
 ```json
 {
