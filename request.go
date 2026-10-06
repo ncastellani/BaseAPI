@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"net/http"
 	"net/url"
 	"slices"
 	"strconv"
@@ -164,6 +165,10 @@ func (r *Request) applyCancellationResult() {
 // back to "I002" so the HTTP layer never panics on an unknown code (the
 // resource's data is still attached, only the message/HTTPCode change).
 //
+// Two successful (2xx) answers skip the envelope: a redirect requested
+// through r.RedirectTo (a bare 302 with a Location header, on any
+// output_format) and the document of a route declaring output_format=xml.
+//
 // The CORS, cache-control and content-type headers are wide-open by design
 // — this library targets pure JSON APIs that sit behind their own gateway.
 func (r *Request) makeResponse() (int, []byte, map[string]string) {
@@ -183,6 +188,28 @@ func (r *Request) makeResponse() (int, []byte, map[string]string) {
 		"Access-Control-Allow-Methods": "*",
 		"Access-Control-Allow-Headers": "*",
 		"Access-Control-Max-Age":       "86400",
+	}
+
+	// a resource function that asked for a redirect answers a bare 302 to
+	// its URL, whatever the route's output_format. like the XML answer, only
+	// a successful result follows it: a failure (a cancellation, a panic, a
+	// rollback the post method reported...) keeps the JSON envelope
+	if r.RedirectTo != "" && code.HTTPCode >= 200 && code.HTTPCode < 300 {
+		err := validateRedirectURL(r.RedirectTo)
+		if err == nil {
+			delete(headers, "Content-Type")
+			headers["Location"] = r.RedirectTo
+			headers["Cache-Control"] = "no-store"
+
+			r.Logger.Printf("API redirect response assembled. returning HTTP response... [location: %v]", r.RedirectTo)
+
+			return http.StatusFound, []byte{}, headers
+		}
+
+		r.Logger.Printf("refused to redirect to an invalid URL [location: %q] [err: %v]", r.RedirectTo, err)
+
+		r.ResultCode, r.ResultData = "I001", err.Error()
+		code = r.api.codes["I001"]
 	}
 
 	// a route answering XML returns its data as the document itself, with no
@@ -226,6 +253,28 @@ func (r *Request) makeResponse() (int, []byte, map[string]string) {
 	r.Logger.Println("API response assembled. returning HTTP response...")
 
 	return code.HTTPCode, content, headers
+}
+
+// validateRedirectURL accepts only absolute http or https URLs with a host,
+// so a resource function can never send the client to a relative path, to
+// another scheme (javascript:, data:, ftp:...) or to a malformed location.
+// url.Parse already rejects control characters, which keeps CR/LF out of the
+// Location header
+func validateRedirectURL(location string) error {
+	u, err := url.Parse(location)
+	if err != nil {
+		return fmt.Errorf("invalid redirect URL: %w", err)
+	}
+
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("invalid redirect URL: the scheme must be http or https")
+	}
+
+	if u.Host == "" {
+		return fmt.Errorf("invalid redirect URL: the URL must be absolute, with a host")
+	}
+
+	return nil
 }
 
 // marshalXML returns the XML document of the result data, prefixed by the

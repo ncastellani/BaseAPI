@@ -47,6 +47,11 @@ type Code struct {
 //   - ResultData, ResultCode: written by the resource method (or by an
 //     earlier failing stage). Initialize ResultCode to "OK" when building
 //     the request.
+//   - RedirectTo: optionally written by the resource method. When set and
+//     the final result is successful (2xx), the response is a 302 to this
+//     URL with an empty body and `Cache-Control: no-store`, whatever the
+//     route's output_format. Only absolute http/https URLs are accepted;
+//     anything else answers "I001".
 type Request struct {
 	api    *API
 	ctx    context.Context
@@ -75,6 +80,7 @@ type Request struct {
 	// method response
 	ResultData any
 	ResultCode string
+	RedirectTo string
 }
 
 // Context returns the context that bounds this request. It is never nil:
