@@ -165,9 +165,10 @@ func (r *Request) applyCancellationResult() {
 // back to "I002" so the HTTP layer never panics on an unknown code (the
 // resource's data is still attached, only the message/HTTPCode change).
 //
-// Two successful (2xx) answers skip the envelope: a redirect requested
+// Three successful (2xx) answers skip the envelope: a redirect requested
 // through r.RedirectTo (a bare 302 with a Location header, on any
-// output_format) and the document of a route declaring output_format=xml.
+// output_format), the document of a route declaring output_format=xml and
+// the bare body of a route declaring output_format=text.
 //
 // The CORS, cache-control and content-type headers are wide-open by design
 // — this library targets pure JSON APIs that sit behind their own gateway.
@@ -227,6 +228,25 @@ func (r *Request) makeResponse() (int, []byte, map[string]string) {
 		}
 
 		r.Logger.Printf("failed to marshal the XML response [err: %v]", err)
+
+		r.ResultCode, r.ResultData = "I001", err.Error()
+		code = r.api.codes["I001"]
+	}
+
+	// a route answering text returns its data as the body itself, with no
+	// envelope: its consumers (endpoint validation calls) expect a bare value
+	// back. like the XML answer, failures keep the JSON envelope
+	if r.Resource.OutputFormat == "text" && code.HTTPCode >= 200 && code.HTTPCode < 300 {
+		content, err := r.encodeText()
+		if err == nil {
+			headers["Content-Type"] = "text/plain; charset=utf-8"
+
+			r.Logger.Println("API text response assembled. returning HTTP response...")
+
+			return code.HTTPCode, content, headers
+		}
+
+		r.Logger.Printf("failed to encode the text response [err: %v]", err)
 
 		r.ResultCode, r.ResultData = "I001", err.Error()
 		code = r.api.codes["I001"]
@@ -295,6 +315,22 @@ func (r *Request) marshalXML() ([]byte, error) {
 	}
 
 	return append([]byte(xml.Header), body...), nil
+}
+
+// encodeText returns the result data as the response body itself. only a
+// string or a []byte is accepted; no data (nil, the lifecycle default)
+// answers an empty body
+func (r *Request) encodeText() ([]byte, error) {
+	switch v := r.ResultData.(type) {
+	case nil:
+		return []byte{}, nil
+	case string:
+		return []byte(v), nil
+	case []byte:
+		return v, nil
+	}
+
+	return nil, fmt.Errorf("unsupported text response data: %T (expected string or []byte)", r.ResultData)
 }
 
 // determineResource matches r.Path and r.Method against the route table and
