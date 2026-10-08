@@ -42,7 +42,7 @@ var requiredCodes = []string{"OK", "I001", "I002", "I003", "G004", "G005", "G008
 var validInputFormats = []string{"json", "form"}
 
 // validOutputFormats are the accepted values for Resource.OutputFormat.
-var validOutputFormats = []string{"json", "xml"}
+var validOutputFormats = []string{"json", "xml", "text"}
 
 // validGetFrom are the accepted values for ResourceParameter.GetFrom.
 var validGetFrom = []string{"body", "query"}

@@ -75,7 +75,11 @@ Map of `path → method → resource`. Every resource must declare:
   `encoding/xml` as the document itself (no envelope), with
   `Content-Type: application/xml`. Return a struct whose `XMLName` is the
   root element your consumer expects — e.g. `<Response>` for Twilio TwiML.
-  A `nil` result answers an empty body.
+  A `nil` result answers an empty body. `"text"` answers the data the
+  resource function returned as the body itself (no envelope), with
+  `Content-Type: text/plain; charset=utf-8` — for callers that expect a bare
+  value back, like services validating an endpoint. Return a `string` or a
+  `[]byte`; a `nil` result answers an empty body.
 - `authentication` — when `true`, the request must carry an
   `Authorization: Bearer <token>` header.
 - `setup_transaction` — advisory flag your `RequestPreMethod` middleware
@@ -181,8 +185,10 @@ func sendEvent(r *baseapi.Request) (any, string) {
 A resource function receives the fully-validated request and returns
 `(data, code)`:
 
-- `data` becomes the `data` field of the JSON response envelope, or the
-  XML document itself on routes declaring `output_format: "xml"`.
+- `data` becomes the `data` field of the JSON response envelope, the
+  XML document itself on routes declaring `output_format: "xml"`, or the
+  plain-text body itself on routes declaring `output_format: "text"` (a
+  `string` or a `[]byte`).
 - `code` is looked up in `codes.json` to determine the HTTP status and the
   localized message. Returning the empty string is treated as `"OK"`.
 
@@ -378,8 +384,8 @@ api.RequestPostMethod = func(r *baseapi.Request) {
 ## Response envelope
 
 Every response — including errors, and except [redirects](#redirecting) and
-the successful answers of `output_format: "xml"` routes (below) — has the same
-shape:
+the successful answers of `output_format: "xml"` and `output_format: "text"`
+routes (below) — has the same shape:
 
 ```json
 {
@@ -395,10 +401,12 @@ For `G005` (validation failure), `data` is `{ "missing": [...], "invalid": [...]
 where each entry is the original `ResourceParameter` declaration, so the
 client can render exactly which fields failed.
 
-Routes declaring `output_format: "xml"` skip the envelope on successful (2xx)
-answers. Failures keep the JSON envelope above, since many of them (G005,
-authentication, unknown codes) are produced before the resource function runs.
-If the result cannot be marshaled to XML, the answer is an `I001` envelope.
+Routes declaring `output_format: "xml"` or `output_format: "text"` skip the
+envelope on successful (2xx) answers. Failures keep the JSON envelope above,
+since many of them (G005, authentication, unknown codes) are produced before
+the resource function runs. If the result cannot be marshaled to XML, or a
+text route returns anything other than a `string`, a `[]byte` or `nil`, the
+answer is an `I001` envelope.
 
 ## Boot-time validation
 
