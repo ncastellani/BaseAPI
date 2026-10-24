@@ -172,6 +172,11 @@ func (r *Request) applyCancellationResult() {
 //
 // The CORS, cache-control and content-type headers are wide-open by design
 // — this library targets pure JSON APIs that sit behind their own gateway.
+// Access-Control-Allow-Headers names Authorization next to the "*" on
+// purpose: per the Fetch spec, the wildcard covers any header on requests
+// without credentials but never Authorization, which must be listed by name
+// for the preflight of a "Bearer" call to pass (Safari/WebKit enforces it).
+// Do not simplify it back to a bare "*".
 func (r *Request) makeResponse() (int, []byte, map[string]string) {
 	r.Logger.Printf("starting the response assemble... [code: %v]", r.ResultCode)
 
@@ -187,7 +192,7 @@ func (r *Request) makeResponse() (int, []byte, map[string]string) {
 		"Cache-Control":                "max-age=0,private,must-revalidate,no-cache",
 		"Access-Control-Allow-Origin":  "*",
 		"Access-Control-Allow-Methods": "*",
-		"Access-Control-Allow-Headers": "*",
+		"Access-Control-Allow-Headers": "*, Authorization",
 		"Access-Control-Max-Age":       "86400",
 	}
 
